@@ -1,7 +1,3 @@
--- ==================== AutoQTE (差值<=0.05 + 0.3s冷却) + AutoDomain ====================
--- Toggle1: 自动 QTE (ZonePos与MarkerPos差值<=0.05时点击, 冷却0.3秒)
--- Toggle2: 自动开领域 (JusticeSorcerer.Domain)
-
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
