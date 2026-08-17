@@ -1,0 +1,135 @@
+name: Update Keys
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update-keys:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Update key expiration
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+          import time
+
+          key_file = Path("Key.txt")
+          state_file = Path(".key_timer")
+
+          now = int(time.time())
+
+          # 第一次运行
+          if state_file.exists():
+              try:
+                  last_time = int(state_file.read_text().strip())
+              except:
+                  last_time = now
+          else:
+              last_time = now
+
+          elapsed = max(0, now - last_time)
+
+          lines = key_file.read_text().splitlines()
+          new_lines = []
+
+          for line in lines:
+              line = line.strip()
+
+              if not line:
+                  continue
+
+              parts = line.split()
+
+              if len(parts) < 2:
+                  new_lines.append(line)
+                  continue
+
+              key = parts[0]
+              value = parts[1]
+
+              # 永久 Key
+              if value.lower() == "never":
+                  new_lines.append(f"{key} never")
+                  continue
+
+              # 数字 Key
+              try:
+                  seconds = int(value)
+              except:
+                  new_lines.append(line)
+                  continue
+
+              seconds -= elapsed
+
+              # 到期
+              if seconds <= 0:
+                  seconds = 0
+
+              new_lines.append(f"{key} {seconds}")
+
+          key_file.write_text("\n".join(new_lines) + "\n")
+
+          # 保存这次运行时间
+          state_file.write_text(str(now))
+
+          print(f"Elapsed: {elapsed} seconds")
+          print("Key.txt updated.")
+          PY
+
+      - name: Commit changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add Key.txt .key_timer
+
+          if git diff --cached --quiet; then
+            echo "No changes."
+          else
+            git commit -m "Update key timers"
+            git push
+          fi# This is a basic workflow to help you get started with Actions
+
+name: CI
+
+# Controls when the workflow will run
+on:
+  # Triggers the workflow on push or pull request events but only for the "main" branch
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+
+# A workflow run is made up of one or more jobs that can run sequentially or in parallel
+jobs:
+  # This workflow contains a single job called "build"
+  build:
+    # The type of runner that the job will run on
+    runs-on: ubuntu-latest
+
+    # Steps represent a sequence of tasks that will be executed as part of the job
+    steps:
+      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
+      - uses: actions/checkout@v4
+
+      # Runs a single command using the runners shell
+      - name: Run a one-line script
+        run: echo Hello, world!
+
+      # Runs a set of commands using the runners shell
+      - name: Run a multi-line script
+        run: |
+          echo Add other actions to build,
+          echo test, and deploy your project.
