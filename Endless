@@ -14,7 +14,6 @@ _G.autoSkipCalled = false
 _G.kingPlaced = false
 _G.snailPresent = false
 _G.upgradeBlocked = false
-_G.b85Moved = false  -- 标记是否已执行过B85迁移
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
@@ -85,7 +84,6 @@ task.spawn(function()
     print("[系统] 玩家塔数据已加载")
 end)
 
--- 默认坐标（所有地图）
 local POSITIONS = {
     Jogo = {
         BASIC = CFrame.new(-42.24, 13, -108.03),
@@ -125,11 +123,9 @@ local POSITIONS = {
     Meguna = {
         BASIC = CFrame.new(-41.10, 25.59, -180.09),
         CHEAP = CFrame.new(16.74, 29.04, -154.48),
-        -- B85 会动态决定位置，这里存早期和最终
-        B85_EARLY = CFrame.new(-24.43, 25.59, -111.47),
-        B85_FINAL = CFrame.new(-41.11, 25.59, -166.79),
-        GOJO = CFrame.new(-41.11, 25.59, -166.79),
-        KING = CFrame.new(-41.11, 25.59, -166.79)
+        B85 = CFrame.new(-24.43, 25.59, -111.47),
+        GOJO = CFrame.new(-24.43, 25.59, -111.47),
+        KING = CFrame.new(-24.43, 25.59, -111.47)
     }
 }
 
@@ -518,86 +514,13 @@ task.spawn(function()
     end
 end)
 
--- ==================== 获取当前波数 ====================
-local function GetWave()
-    local info = Workspace:FindFirstChild("Info")
-    if not info then return 0 end
-    local wave = info:FindFirstChild("Wave")
-    if not wave or not wave:IsA("ValueBase") then return 0 end
-    return wave.Value or 0
-end
-
--- ==================== 获取Meguna地图中B85的放置坐标 ====================
-local function GetB85Position()
-    if currentMap ~= "Meguna" then
-        -- 非Meguna地图，直接从POSITIONS取B85
-        local pos = POSITIONS[currentMap]
-        return pos and pos.B85
-    end
-    -- Meguna地图：10波前用早期坐标，10波后用最终坐标
-    local wave = GetWave()
-    if wave < 10 then
-        return POSITIONS.Meguna.B85_EARLY
-    else
-        return POSITIONS.Meguna.B85_FINAL
-    end
-end
-
--- ==================== B85迁移检测 ====================
-local function CheckB85Migration()
-    if currentMap ~= "Meguna" then return end
-    if _G.b85Moved then return end
-    local wave = GetWave()
-    if wave >= 10 then
-        -- 卖掉现有的B85，并在新坐标放置
-        local towersFolder = Workspace:FindFirstChild("Towers")
-        if towersFolder then
-            local oldB85 = nil
-            for _, t in ipairs(towersFolder:GetChildren()) do
-                if t.Name:find(TOWER_NAMES.B85) then
-                    oldB85 = t
-                    break
-                end
-            end
-            if oldB85 then
-                pcall(function()
-                    SellTower:InvokeServer(oldB85)
-                    print("[系统] 卖掉10波前的冰冻宿傩")
-                end)
-                task.wait(0.2)
-                -- 放置新B85到最终坐标
-                local pos = POSITIONS.Meguna.B85_FINAL
-                local u = ResolveUUID(TOWER_NAMES.B85)
-                if u then
-                    pcall(function()
-                        SpawnNewTower:InvokeServer(u, pos)
-                        print("[系统] 在最终位置放置冰冻宿傩")
-                    end)
-                end
-                _G.b85Moved = true
-                -- 更新frostPlaced标志，以免ProcessFlow再次尝试放置
-                _G.frostPlaced = true
-            end
-        end
-    end
-end
-
--- ==================== 放置函数（修改为支持动态坐标） ====================
 local function PlaceTower(nameKey)
     if _G.stopAll then return false end
     local towerName = TOWER_NAMES[nameKey]
     if not towerName then return false end
     local posTable = GetPositions()
     if not posTable then return false end
-    
-    local pos
-    if nameKey == "B85" and currentMap == "Meguna" then
-        -- B85使用动态坐标
-        pos = GetB85Position()
-    else
-        pos = posTable[nameKey]
-    end
-    
+    local pos = posTable[nameKey]
     if not pos then return false end
     local u = ResolveUUID(towerName)
     if not u then return false end
@@ -656,15 +579,6 @@ task.spawn(function()
     end
 end)
 
--- ==================== B85迁移监控线程 ====================
-task.spawn(function()
-    while task.wait(0.5) do
-        if IsInGame() and not _G.stopAll then
-            pcall(CheckB85Migration)
-        end
-    end
-end)
-
 local function ProcessFlow()
     if _G.stopAll then return end
     if not IsInGame() then return end
@@ -681,9 +595,7 @@ local function ProcessFlow()
         return
     end
 
-    -- 放置B85（但如果已经迁移过且处于Meguna地图，可能已经放置了最终B85，但此处避免重复放置）
     if not _G.frostPlaced then
-        -- 检查是否已存在B85（无论哪个位置）
         local b85s = GetTowersByName(TOWER_NAMES.B85)
         if #b85s < 1 then
             PlaceTower("B85")
@@ -709,6 +621,7 @@ local function ProcessFlow()
         task.wait(0.1)
     end
 
+    -- King 优先放置（如果还没放）
     if #kings < 1 and not _G.kingPlaced then
         PlaceTower("KING")
         task.wait(0.1)
