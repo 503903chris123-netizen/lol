@@ -1,0 +1,1332 @@
+--========================================================--
+--        CULLING GAMES // NEXUS AUTOMATION SYSTEM
+--        Advanced Black-Tech HUD Edition
+--        支持 Colony1~5 自动识别，Colony5 优先 Strongest
+--        Colony5 中 Kogane 绑定 Strongest
+--        阶段顺序：
+--          Colony1-4: Harvester → Kogane(绑定Harvester) → Justice → Agent+Strongest
+--          Colony5:   Strongest → Harvester → Kogane(绑定Strongest) → Justice → Agent
+--        UI 位于屏幕顶端
+--========================================================--
+
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Workspace = game:GetService("Workspace")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+
+--========================================================--
+-- CONFIG
+--========================================================--
+
+local running = true
+local currentTeleporter = nil
+local lastTeleporterIndex = 0
+local currentStage = 0
+local upgradeEnabled = false
+local inLobby = true
+local startSent = false
+
+local StartTime = tick()
+
+local DebugMessages = {}
+local MAX_DEBUG = 7
+
+--========================================================--
+-- DEBUG
+--========================================================--
+
+local function AddDebug(message)
+    table.insert(DebugMessages, 1, {
+        time = os.date("%H:%M:%S"),
+        text = tostring(message)
+    })
+
+    while #DebugMessages > MAX_DEBUG do
+        table.remove(DebugMessages)
+    end
+
+    print("[NEXUS]", message)
+end
+
+--========================================================--
+-- SAFE REMOTE
+--========================================================--
+
+local function GetRemotes()
+    return ReplicatedStorage:FindFirstChild("Remotes")
+end
+
+local function GetTeleportersRemote()
+    local remotes = GetRemotes()
+    if not remotes then return nil end
+    return remotes:FindFirstChild("CullingGamesTeleporters")
+end
+
+--========================================================--
+-- TOWER UUID
+--========================================================--
+
+local uuidCache = {}
+
+local function GetUUIDByName(towerName)
+    local remotes = GetRemotes()
+    if not remotes then return nil end
+    local remote = remotes:FindFirstChild("GetAllData")
+    if not remote then return nil end
+
+    local success, data = pcall(function()
+        return remote:InvokeServer()
+    end)
+
+    if not success or not data or not data.Towers then
+        return nil
+    end
+
+    for uuid, info in pairs(data.Towers) do
+        if info and info.Name == towerName then
+            return uuid
+        end
+    end
+
+    return nil
+end
+
+local function GetTowerUUID(name)
+    if uuidCache[name] then return uuidCache[name] end
+    local uuid = GetUUIDByName(name)
+    if uuid then uuidCache[name] = uuid end
+    return uuid
+end
+
+--========================================================--
+-- TOWER CONFIG
+--========================================================--
+
+local TOWER_CONFIGS = {
+    { key = "HARVESTER", displayName = "HarvesterCurse", folderName = "HarvesterCurse", max = 1, stage = 0 },
+    { key = "KOGANE", displayName = "Kogane", folderName = "Kogane", max = 1, stage = 1 },
+    { key = "JUSTICE", displayName = "JusticeSorcerer", folderName = "JusticeSorcerer", max = 1, stage = 2 },
+    { key = "AGENT", displayName = "SorcererAgent", folderName = "SorcererAgent", max = 4, stage = 3 },
+    { key = "STRONGEST", displayName = "StrongestSorcererEvo", folderName = "StrongestSorcererEvo", max = 1, stage = 3 }
+}
+
+--========================================================--
+-- MAP DETECTION (支持 Colony1~5)
+--========================================================--
+
+local function GetMap()
+    return Workspace:FindFirstChild("Map")
+end
+
+local function GetCurrentColony()
+    local map = GetMap()
+    if not map then return nil end
+    if map:FindFirstChild("Colony1") then
+        return "Colony1"
+    elseif map:FindFirstChild("Colony2") then
+        return "Colony2"
+    elseif map:FindFirstChild("Colony3") then
+        return "Colony3"
+    elseif map:FindFirstChild("Colony4") then
+        return "Colony4"
+    elseif map:FindFirstChild("Colony5") then
+        return "Colony5"
+    end
+    return nil
+end
+
+local function IsInGame()
+    local colony = GetCurrentColony()
+    if colony then return true end
+    local towers = Workspace:FindFirstChild("Towers")
+    if towers and #towers:GetChildren() > 0 then return true end
+    return false
+end
+
+--========================================================--
+-- TELEPORTERS
+--========================================================--
+
+local function GetTeleporters()
+    local folder = Workspace:FindFirstChild("CullingGamesTeleporters")
+    if not folder then return {} end
+    local result = {}
+    for _, child in ipairs(folder:GetChildren()) do
+        if child:IsA("Model") then
+            table.insert(result, child)
+        end
+    end
+    table.sort(result, function(a, b)
+        local aNum = tonumber(a.Name:match("%d+")) or 0
+        local bNum = tonumber(b.Name:match("%d+")) or 0
+        return aNum < bNum
+    end)
+    return result
+end
+
+local function IsTeleporterEmpty(tp)
+    if not tp then return false end
+    local config = tp:FindFirstChild("Config")
+    if config then
+        local playerCount = config:FindFirstChild("PlayerCount")
+        if playerCount then
+            return playerCount.Value == 0
+        end
+    end
+    return true
+end
+
+local function GetTeleporterPlayerCount(tp)
+    if not tp then return 0, 4 end
+    local billboard = tp:FindFirstChild("Billboard")
+    if not billboard then return 0, 4 end
+    local gui = billboard:FindFirstChild("BillboardGui")
+    if not gui then return 0, 4 end
+    local label = gui:FindFirstChild("PlayerCount")
+    if not label or not label:IsA("TextLabel") then return 0, 4 end
+    local text = label.Text
+    local count = tonumber(text:match("^(%d+)"))
+    local max = tonumber(text:match("/(%d+)"))
+    return count or 0, max or 4
+end
+
+local function GetNextEmptyTeleporter()
+    local teleporters = GetTeleporters()
+    if #teleporters == 0 then return nil end
+    for i = 1, #teleporters do
+        local index = ((lastTeleporterIndex + i - 1) % #teleporters) + 1
+        local tp = teleporters[index]
+        if IsTeleporterEmpty(tp) then
+            lastTeleporterIndex = index
+            return tp
+        end
+    end
+    return nil
+end
+
+local function GoToTeleporter()
+    local character = LocalPlayer.Character
+    if not character then return false end
+    local root = character:FindFirstChild("HumanoidRootPart")
+    if not root then return false end
+    local tp = GetNextEmptyTeleporter()
+    if not tp then return false end
+    local teleports = tp:FindFirstChild("Teleports")
+    if not teleports then return false end
+    local entrance = teleports:FindFirstChild("Entrance")
+    if not entrance then return false end
+    root.CFrame = CFrame.new(entrance.Position + Vector3.new(0, 3, 0))
+    currentTeleporter = tp
+    return true
+end
+
+--========================================================--
+-- REMOTE CONNECTION
+--========================================================--
+
+local connectedTeleportersRemote = nil
+
+local function ConnectTeleportersRemote(remote)
+    if not remote then return end
+    if connectedTeleportersRemote == remote then return end
+    connectedTeleportersRemote = remote
+    AddDebug("Teleporters Remote connected")
+
+    local host = remote:FindFirstChild("Host")
+    local chooseStage = remote:FindFirstChild("ChooseStage")
+    local startCountdown = remote:FindFirstChild("StartCountdown")
+    local startRemote = remote:FindFirstChild("Start")
+    local leave = remote:FindFirstChild("Leave")
+
+    if host and host:IsA("RemoteEvent") then
+        host.OnClientEvent:Connect(function(tp)
+            if not running then return end
+            currentTeleporter = tp
+            task.wait(0.3)
+            local r = GetTeleportersRemote()
+            if not r then return end
+            local choose = r:FindFirstChild("ChooseStage")
+            if choose and choose:IsA("RemoteEvent") then
+                pcall(function()
+                    choose:FireServer(tp, false)
+                end)
+            end
+        end)
+    end
+
+    if startCountdown and startCountdown:IsA("RemoteEvent") then
+        startCountdown.OnClientEvent:Connect(function()
+            if not running then return end
+            if currentTeleporter then
+                task.wait(0.2)
+                local r = GetTeleportersRemote()
+                if not r then return end
+                local start = r:FindFirstChild("Start")
+                if start and start:IsA("RemoteEvent") then
+                    pcall(function()
+                        start:FireServer(currentTeleporter)
+                    end)
+                    startSent = true
+                end
+            end
+        end)
+    end
+
+    if leave and leave:IsA("RemoteEvent") then
+        leave.OnClientEvent:Connect(function()
+            if not running then return end
+            currentTeleporter = nil
+            startSent = false
+        end)
+    end
+end
+
+task.spawn(function()
+    while running do
+        local remote = GetTeleportersRemote()
+        if remote then ConnectTeleportersRemote(remote) end
+        task.wait(0.5)
+    end
+end)
+
+--========================================================--
+-- LOBBY LOOP
+--========================================================--
+
+task.spawn(function()
+    while running do
+        pcall(function()
+            if not IsInGame() then
+                inLobby = true
+                GoToTeleporter()
+                local remote = GetTeleportersRemote()
+                if remote and currentTeleporter then
+                    local tryStart = remote:FindFirstChild("TryToStart")
+                    if tryStart and tryStart:IsA("RemoteEvent") then
+                        pcall(function()
+                            tryStart:FireServer(currentTeleporter)
+                        end)
+                    end
+                    local start = remote:FindFirstChild("Start")
+                    if start and start:IsA("RemoteEvent") then
+                        pcall(function()
+                            start:FireServer(currentTeleporter)
+                        end)
+                        startSent = true
+                    end
+                end
+            else
+                inLobby = false
+            end
+        end)
+        task.wait(0.1)
+    end
+end)
+
+--========================================================--
+-- MODIFIERS
+--========================================================--
+
+task.spawn(function()
+    while running do
+        pcall(function()
+            local remotes = GetRemotes()
+            if remotes then
+                local culling = remotes:FindFirstChild("CullingGames")
+                if culling then
+                    local modifiers = culling:FindFirstChild("ChooseModifiers")
+                    if modifiers then
+                        pcall(function()
+                            modifiers:FireServer(true)
+                        end)
+                    end
+                end
+            end
+        end)
+        task.wait(1)
+    end
+end)
+
+--========================================================--
+-- TOWER DETECTION (Workspace.Towers)
+--========================================================--
+
+local function GetTowersFolder()
+    return Workspace:FindFirstChild("Towers")
+end
+
+local function GetTowersByName(name)
+    local folder = GetTowersFolder()
+    if not folder then return {} end
+    local result = {}
+    for _, tower in ipairs(folder:GetChildren()) do
+        if tower.Name:sub(1, #name) == name then
+            table.insert(result, tower)
+        end
+    end
+    return result
+end
+
+local function GetTowerCount(name)
+    return #GetTowersByName(name)
+end
+
+local function GetTowerLevel(tower)
+    local level = tonumber(string.match(tower.Name, "%d+"))
+    return level or 1
+end
+
+local function GetTowerLevels(name)
+    local towers = GetTowersByName(name)
+    local levels = {}
+    for _, t in ipairs(towers) do
+        table.insert(levels, GetTowerLevel(t))
+    end
+    table.sort(levels)
+    return levels
+end
+
+--========================================================--
+-- 获取当前地图放置坐标
+--========================================================--
+
+local function GetPlacementPosition()
+    local colony = GetCurrentColony()
+    if colony == "Colony1" then
+        return CFrame.new(12.42, 48.59, -119.27)
+    elseif colony == "Colony2" then
+        return CFrame.new(-24.00, 34.64, -105.45)
+    elseif colony == "Colony3" then
+        return CFrame.new(-9.71, 49.09, -108.17)
+    elseif colony == "Colony4" then
+        return CFrame.new(-31.33, 39.92, -127.76)
+    elseif colony == "Colony5" then
+        return CFrame.new(-14.18, 47.84, -134.53)
+    else
+        return CFrame.new(12.42, 48.59, -119.27)
+    end
+end
+
+--========================================================--
+-- PLACE TOWER (支持自定义绑定目标)
+--========================================================--
+
+local function PlaceTower(key, bindTarget)
+    local config
+    for _, c in ipairs(TOWER_CONFIGS) do
+        if c.key == key then
+            config = c
+            break
+        end
+    end
+    if not config then return false end
+
+    local uuid = GetTowerUUID(config.folderName)
+    if not uuid then
+        AddDebug("无法获取 " .. config.folderName .. " 的 UUID")
+        return false
+    end
+
+    local functions = ReplicatedStorage:FindFirstChild("Functions")
+    if not functions then return false end
+    local spawnTower = functions:FindFirstChild("SpawnNewTower")
+    if not spawnTower then return false end
+
+    local position = GetPlacementPosition()
+
+    if key == "KOGANE" then
+        -- 如果传入了绑定目标，使用它；否则使用 HarvesterCurse
+        local target = bindTarget
+        if not target then
+            local harvesters = GetTowersByName("HarvesterCurse")
+            if #harvesters > 0 then
+                target = harvesters[1]
+            else
+                AddDebug("Kogane: 找不到绑定目标 (HarvesterCurse)")
+                return false
+            end
+        end
+        local success, result = pcall(function()
+            return spawnTower:InvokeServer(uuid, position, target)
+        end)
+        if success and result then
+            AddDebug("Kogane 放置成功（绑定 " .. target.Name .. "）")
+            return true
+        else
+            AddDebug("Kogane 放置失败")
+            return false
+        end
+    else
+        local success, result = pcall(function()
+            return spawnTower:InvokeServer(uuid, position)
+        end)
+        if success and result then
+            AddDebug(config.folderName .. " 放置成功")
+            return true
+        else
+            AddDebug(config.folderName .. " 放置失败")
+            return false
+        end
+    end
+end
+
+--========================================================--
+-- UPGRADE
+--========================================================--
+
+local function UpgradeLoop()
+    if not upgradeEnabled then return end
+
+    local towers = GetTowersFolder()
+    if not towers then return end
+
+    local functions = ReplicatedStorage:FindFirstChild("Functions")
+    if not functions then return end
+    local upgrade = functions:FindFirstChild("UpgradeTower")
+    if not upgrade then return end
+
+    for _, tower in ipairs(towers:GetChildren()) do
+        if not running then break end
+        pcall(function()
+            upgrade:InvokeServer(tower)
+        end)
+        task.wait(0.05)
+    end
+end
+
+--========================================================--
+-- TOWER LOGIC (根据地图调整阶段)
+--========================================================--
+
+task.spawn(function()
+    while running do
+        task.wait(0.3)
+
+        pcall(function()
+            local colony = GetCurrentColony()
+            if not colony then
+                currentStage = 0
+                upgradeEnabled = false
+                return
+            end
+
+            -- 计数
+            local harvesterCount = GetTowerCount("HarvesterCurse")
+            local koganeCount = GetTowerCount("Kogane")
+            local justiceCount = GetTowerCount("JusticeSorcerer")
+            local agentCount = GetTowerCount("SorcererAgent")
+            local strongestCount = GetTowerCount("StrongestSorcererEvo")
+
+            -- 判断是否为 Colony5（使用 Strongest 优先）
+            local isColony5 = (colony == "Colony5")
+
+            -- ===== 阶段管理 =====
+            if currentStage == 0 then
+                if isColony5 then
+                    -- Colony5: 优先放置 Strongest
+                    if strongestCount < 1 then
+                        if PlaceTower("STRONGEST") then
+                            AddDebug("StrongestSorcererEvo 已放置 (Colony5 优先)")
+                        end
+                    else
+                        currentStage = 1
+                        AddDebug("Stage 0 complete (Strongest placed)")
+                    end
+                else
+                    -- 其他地图: 放置 Harvester
+                    if harvesterCount < 1 then
+                        if PlaceTower("HARVESTER") then
+                            AddDebug("HarvesterCurse 已放置")
+                        end
+                    else
+                        currentStage = 1
+                        AddDebug("Stage 0 complete")
+                    end
+                end
+
+            elseif currentStage == 1 then
+                if isColony5 then
+                    -- Colony5: 第二阶段放置 Harvester
+                    if harvesterCount < 1 then
+                        if PlaceTower("HARVESTER") then
+                            AddDebug("HarvesterCurse 已放置 (Colony5)")
+                        end
+                    else
+                        currentStage = 2
+                        AddDebug("Stage 1 complete (Harvester placed)")
+                    end
+                else
+                    -- 其他地图: 放置 Kogane（绑定 Harvester）
+                    local harvesters = GetTowersByName("HarvesterCurse")
+                    if #harvesters == 0 then
+                        currentStage = 0
+                        AddDebug("Harvester丢失，回到Stage 0")
+                        return
+                    end
+                    if koganeCount < 1 then
+                        if PlaceTower("KOGANE") then
+                            AddDebug("Kogane 已放置 (绑定 Harvester)")
+                        end
+                    else
+                        currentStage = 2
+                        AddDebug("Stage 1 complete - 进入 Justice 阶段")
+                    end
+                end
+
+            elseif currentStage == 2 then
+                if isColony5 then
+                    -- Colony5: 放置 Kogane（绑定 Strongest）
+                    local strongests = GetTowersByName("StrongestSorcererEvo")
+                    if #strongests == 0 then
+                        currentStage = 0
+                        AddDebug("Strongest丢失，回到Stage 0 (Colony5)")
+                        return
+                    end
+                    if koganeCount < 1 then
+                        if PlaceTower("KOGANE", strongests[1]) then
+                            AddDebug("Kogane 已放置 (Colony5, 绑定 Strongest)")
+                        end
+                    else
+                        currentStage = 3
+                        AddDebug("Stage 2 complete - 进入 Justice 阶段")
+                    end
+                else
+                    -- 其他地图: 放置 Justice
+                    if justiceCount < 1 then
+                        if PlaceTower("JUSTICE") then
+                            AddDebug("JusticeSorcerer 已放置")
+                        end
+                    else
+                        currentStage = 3
+                        upgradeEnabled = true
+                        AddDebug("Stage 2 complete - Justice 已就绪，升级开启")
+                    end
+                end
+
+            elseif currentStage == 3 then
+                if isColony5 then
+                    -- Colony5: 放置 Justice
+                    if justiceCount < 1 then
+                        if PlaceTower("JUSTICE") then
+                            AddDebug("JusticeSorcerer 已放置 (Colony5)")
+                        end
+                    else
+                        currentStage = 4
+                        upgradeEnabled = true
+                        AddDebug("Stage 3 complete - Justice 已就绪，升级开启")
+                    end
+                else
+                    -- 其他地图: 放置 Agent 和 Strongest（Strongest 在 Stage3 放）
+                    if agentCount < 4 then
+                        if PlaceTower("AGENT") then
+                            AddDebug("放置 Agent")
+                        end
+                    end
+                    if strongestCount < 1 then
+                        if PlaceTower("STRONGEST") then
+                            AddDebug("放置 StrongestSorcererEvo")
+                        end
+                    end
+                end
+
+            elseif currentStage == 4 and isColony5 then
+                -- Colony5 最后放置 Agent
+                if agentCount < 4 then
+                    if PlaceTower("AGENT") then
+                        AddDebug("放置 Agent (Colony5)")
+                    end
+                end
+                -- 不增加 stage，保持 4，持续放置 Agent 直到满
+            end
+
+            -- 升级（阶段3及以上，或对于非Colony5为阶段2+）
+            if upgradeEnabled then
+                UpgradeLoop()
+            end
+        end)
+    end
+end)
+
+--========================================================--
+-- NEXUS UI (位置: 顶端居中)
+--========================================================--
+
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+
+local old = PlayerGui:FindFirstChild("NexusCullingUI")
+if old then old:Destroy() end
+
+local oldToggle = PlayerGui:FindFirstChild("NexusToggle")
+if oldToggle then oldToggle:Destroy() end
+
+--========================================================--
+-- COLORS
+--========================================================--
+
+local BG = Color3.fromRGB(7, 8, 12)
+local PANEL = Color3.fromRGB(13, 15, 22)
+local PANEL2 = Color3.fromRGB(18, 20, 29)
+local WHITE = Color3.fromRGB(235, 240, 255)
+local MUTED = Color3.fromRGB(120, 130, 150)
+local CYAN = Color3.fromRGB(0, 220, 255)
+local PURPLE = Color3.fromRGB(145, 80, 255)
+local GREEN = Color3.fromRGB(60, 255, 150)
+local YELLOW = Color3.fromRGB(255, 205, 70)
+local RED = Color3.fromRGB(255, 75, 95)
+
+--========================================================--
+-- MAIN GUI
+--========================================================--
+
+local gui = Instance.new("ScreenGui")
+gui.Name = "NexusCullingUI"
+gui.ResetOnSpawn = false
+gui.IgnoreGuiInset = true
+gui.DisplayOrder = 9999
+gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+gui.Parent = PlayerGui
+
+local main = Instance.new("Frame")
+main.Size = UDim2.new(0, 820, 0, 590)
+main.Position = UDim2.new(0.5, -410, 0, 10)
+main.BackgroundColor3 = BG
+main.BackgroundTransparency = 0.04
+main.BorderSizePixel = 0
+main.Parent = gui
+
+local mainCorner = Instance.new("UICorner", main)
+mainCorner.CornerRadius = UDim.new(0, 16)
+
+local mainStroke = Instance.new("UIStroke", main)
+mainStroke.Thickness = 1
+mainStroke.Color = PURPLE
+mainStroke.Transparency = 0.45
+
+local topLine = Instance.new("Frame")
+topLine.Size = UDim2.new(1, -40, 0, 2)
+topLine.Position = UDim2.new(0, 20, 0, 0)
+topLine.BackgroundColor3 = CYAN
+topLine.BorderSizePixel = 0
+topLine.Parent = main
+
+local topGlow = Instance.new("UIGradient", topLine)
+topGlow.Color = ColorSequence.new({
+    ColorSequenceKeypoint.new(0, CYAN),
+    ColorSequenceKeypoint.new(0.5, PURPLE),
+    ColorSequenceKeypoint.new(1, CYAN)
+})
+
+local header = Instance.new("Frame")
+header.Size = UDim2.new(1, -30, 0, 70)
+header.Position = UDim2.new(0, 15, 0, 10)
+header.BackgroundTransparency = 1
+header.Parent = main
+
+local logo = Instance.new("TextLabel")
+logo.Size = UDim2.new(0, 360, 0, 30)
+logo.Position = UDim2.new(0, 5, 0, 4)
+logo.BackgroundTransparency = 1
+logo.Text = "N E X U S   //   C U L L I N G"
+logo.Font = Enum.Font.GothamBold
+logo.TextSize = 20
+logo.TextXAlignment = Enum.TextXAlignment.Left
+logo.TextColor3 = WHITE
+logo.Parent = header
+
+local sub = Instance.new("TextLabel")
+sub.Size = UDim2.new(0, 400, 0, 20)
+sub.Position = UDim2.new(0, 7, 0, 35)
+sub.BackgroundTransparency = 1
+sub.Text = "AUTOMATION CORE  /  v3.6"
+sub.Font = Enum.Font.Code
+sub.TextSize = 11
+sub.TextXAlignment = Enum.TextXAlignment.Left
+sub.TextColor3 = MUTED
+sub.Parent = header
+
+local statusFrame = Instance.new("Frame")
+statusFrame.Size = UDim2.new(0, 175, 0, 38)
+statusFrame.Position = UDim2.new(1, -180, 0, 12)
+statusFrame.BackgroundColor3 = PANEL2
+statusFrame.BorderSizePixel = 0
+statusFrame.Parent = header
+
+local statusCorner = Instance.new("UICorner", statusFrame)
+statusCorner.CornerRadius = UDim.new(0, 10)
+
+local statusStroke = Instance.new("UIStroke", statusFrame)
+statusStroke.Color = CYAN
+statusStroke.Transparency = 0.65
+
+local statusDot = Instance.new("Frame")
+statusDot.Size = UDim2.new(0, 9, 0, 9)
+statusDot.Position = UDim2.new(0, 13, 0.5, -4)
+statusDot.BackgroundColor3 = GREEN
+statusDot.BorderSizePixel = 0
+statusDot.Parent = statusFrame
+
+local dotCorner = Instance.new("UICorner", statusDot)
+dotCorner.CornerRadius = UDim.new(1, 0)
+
+local statusText = Instance.new("TextLabel")
+statusText.Size = UDim2.new(1, -35, 1, 0)
+statusText.Position = UDim2.new(0, 32, 0, 0)
+statusText.BackgroundTransparency = 1
+statusText.Text = "SYSTEM ONLINE"
+statusText.Font = Enum.Font.Code
+statusText.TextSize = 11
+statusText.TextXAlignment = Enum.TextXAlignment.Left
+statusText.TextColor3 = GREEN
+statusText.Parent = statusFrame
+
+local leftPanel = Instance.new("Frame")
+leftPanel.Size = UDim2.new(0, 235, 0, 400)
+leftPanel.Position = UDim2.new(0, 20, 0, 90)
+leftPanel.BackgroundColor3 = PANEL
+leftPanel.BorderSizePixel = 0
+leftPanel.Parent = main
+
+local leftCorner = Instance.new("UICorner", leftPanel)
+leftCorner.CornerRadius = UDim.new(0, 12)
+
+local leftStroke = Instance.new("UIStroke", leftPanel)
+leftStroke.Color = PURPLE
+leftStroke.Transparency = 0.7
+
+local function SectionLabel(parent, text, y)
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(1, -24, 0, 22)
+    label.Position = UDim2.new(0, 12, 0, y)
+    label.BackgroundTransparency = 1
+    label.Text = text
+    label.Font = Enum.Font.GothamBold
+    label.TextSize = 10
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.TextColor3 = CYAN
+    label.Parent = parent
+    return label
+end
+
+SectionLabel(leftPanel, "CORE STATUS", 12)
+
+local stageBig = Instance.new("TextLabel")
+stageBig.Size = UDim2.new(1, -24, 0, 50)
+stageBig.Position = UDim2.new(0, 12, 0, 38)
+stageBig.BackgroundTransparency = 1
+stageBig.Text = "STAGE 0"
+stageBig.Font = Enum.Font.GothamBlack
+stageBig.TextSize = 30
+stageBig.TextXAlignment = Enum.TextXAlignment.Left
+stageBig.TextColor3 = WHITE
+stageBig.Parent = leftPanel
+
+local stageDesc = Instance.new("TextLabel")
+stageDesc.Size = UDim2.new(1, -24, 0, 35)
+stageDesc.Position = UDim2.new(0, 12, 0, 82)
+stageDesc.BackgroundTransparency = 1
+stageDesc.Text = "INITIALIZING..."
+stageDesc.Font = Enum.Font.Code
+stageDesc.TextSize = 11
+stageDesc.TextWrapped = true
+stageDesc.TextXAlignment = Enum.TextXAlignment.Left
+stageDesc.TextColor3 = MUTED
+stageDesc.Parent = leftPanel
+
+SectionLabel(leftPanel, "PROCESS", 130)
+
+local progressBack = Instance.new("Frame")
+progressBack.Size = UDim2.new(1, -24, 0, 7)
+progressBack.Position = UDim2.new(0, 12, 0, 158)
+progressBack.BackgroundColor3 = Color3.fromRGB(30, 32, 43)
+progressBack.BorderSizePixel = 0
+progressBack.Parent = leftPanel
+
+local progressCorner = Instance.new("UICorner", progressBack)
+progressCorner.CornerRadius = UDim.new(1, 0)
+
+local progress = Instance.new("Frame")
+progress.Size = UDim2.new(0, 0, 1, 0)
+progress.BackgroundColor3 = CYAN
+progress.BorderSizePixel = 0
+progress.Parent = progressBack
+
+local progressGradient = Instance.new("UIGradient", progress)
+progressGradient.Color = ColorSequence.new({
+    ColorSequenceKeypoint.new(0, CYAN),
+    ColorSequenceKeypoint.new(1, PURPLE)
+})
+
+local progressCorner2 = Instance.new("UICorner", progress)
+progressCorner2.CornerRadius = UDim.new(1, 0)
+
+local function InfoRow(parent, y, title)
+    local frame = Instance.new("Frame")
+    frame.Size = UDim2.new(1, -24, 0, 32)
+    frame.Position = UDim2.new(0, 12, 0, y)
+    frame.BackgroundTransparency = 1
+    frame.Parent = parent
+
+    local left = Instance.new("TextLabel")
+    left.Size = UDim2.new(0.55, 0, 1, 0)
+    left.BackgroundTransparency = 1
+    left.Text = title
+    left.Font = Enum.Font.Code
+    left.TextSize = 10
+    left.TextXAlignment = Enum.TextXAlignment.Left
+    left.TextColor3 = MUTED
+    left.Parent = frame
+
+    local right = Instance.new("TextLabel")
+    right.Size = UDim2.new(0.45, 0, 1, 0)
+    right.Position = UDim2.new(0.55, 0, 0, 0)
+    right.BackgroundTransparency = 1
+    right.Text = "--"
+    right.Font = Enum.Font.Code
+    right.TextSize = 10
+    right.TextXAlignment = Enum.TextXAlignment.Right
+    right.TextColor3 = WHITE
+    right.Parent = frame
+
+    return right
+end
+
+local mapValue = InfoRow(leftPanel, 180, "MAP")
+local playerValue = InfoRow(leftPanel, 212, "PLAYER")
+local remoteValue = InfoRow(leftPanel, 244, "REMOTE")
+local timerValue = InfoRow(leftPanel, 276, "UPTIME")
+local teleporterValue = InfoRow(leftPanel, 308, "TELEPORTER")
+
+local rightPanel = Instance.new("Frame")
+rightPanel.Size = UDim2.new(1, -275, 0, 400)
+rightPanel.Position = UDim2.new(0, 265, 0, 90)
+rightPanel.BackgroundTransparency = 1
+rightPanel.Parent = main
+
+SectionLabel(rightPanel, "TOWER MATRIX", 0)
+
+local towerCards = {}
+
+local TowerInfo = {
+    { name = "HarvesterCurse", short = "HARVESTER", color = CYAN, max = 1 },
+    { name = "Kogane", short = "KOGANE", color = YELLOW, max = 1 },
+    { name = "JusticeSorcerer", short = "JUSTICE", color = RED, max = 1 },
+    { name = "SorcererAgent", short = "AGENT", color = GREEN, max = 4 },
+    { name = "StrongestSorcererEvo", short = "STRONGEST", color = PURPLE, max = 1 }
+}
+
+local function CreateTowerCard(info, index)
+    local card = Instance.new("Frame")
+    card.Size = UDim2.new(0, 255, 0, 112)
+    local col = (index - 1) % 2
+    local row = math.floor((index - 1) / 2)
+    card.Position = UDim2.new(0, col * 267, 0, 28 + row * 122)
+    card.BackgroundColor3 = PANEL
+    card.BorderSizePixel = 0
+    card.Parent = rightPanel
+
+    local corner = Instance.new("UICorner", card)
+    corner.CornerRadius = UDim.new(0, 11)
+
+    local stroke = Instance.new("UIStroke", card)
+    stroke.Color = info.color
+    stroke.Transparency = 0.72
+
+    local glow = Instance.new("Frame")
+    glow.Size = UDim2.new(0, 3, 1, -20)
+    glow.Position = UDim2.new(0, 0, 0, 10)
+    glow.BackgroundColor3 = info.color
+    glow.BorderSizePixel = 0
+    glow.Parent = card
+
+    local glowCorner = Instance.new("UICorner", glow)
+    glowCorner.CornerRadius = UDim.new(1, 0)
+
+    local title = Instance.new("TextLabel")
+    title.Size = UDim2.new(1, -55, 0, 25)
+    title.Position = UDim2.new(0, 14, 0, 10)
+    title.BackgroundTransparency = 1
+    title.Text = info.short
+    title.Font = Enum.Font.GothamBold
+    title.TextSize = 13
+    title.TextXAlignment = Enum.TextXAlignment.Left
+    title.TextColor3 = WHITE
+    title.Parent = card
+
+    local state = Instance.new("TextLabel")
+    state.Size = UDim2.new(0, 75, 0, 20)
+    state.Position = UDim2.new(1, -87, 0, 10)
+    state.BackgroundTransparency = 1
+    state.Text = "WAITING"
+    state.Font = Enum.Font.Code
+    state.TextSize = 9
+    state.TextXAlignment = Enum.TextXAlignment.Right
+    state.TextColor3 = YELLOW
+    state.Parent = card
+
+    local count = Instance.new("TextLabel")
+    count.Size = UDim2.new(1, -28, 0, 30)
+    count.Position = UDim2.new(0, 14, 0, 39)
+    count.BackgroundTransparency = 1
+    count.Text = "0 / " .. info.max
+    count.Font = Enum.Font.GothamBlack
+    count.TextSize = 20
+    count.TextXAlignment = Enum.TextXAlignment.Left
+    count.TextColor3 = info.color
+    count.Parent = card
+
+    local level = Instance.new("TextLabel")
+    level.Size = UDim2.new(1, -28, 0, 18)
+    level.Position = UDim2.new(0, 14, 0, 69)
+    level.BackgroundTransparency = 1
+    level.Text = "LEVEL  --"
+    level.Font = Enum.Font.Code
+    level.TextSize = 10
+    level.TextXAlignment = Enum.TextXAlignment.Left
+    level.TextColor3 = MUTED
+    level.Parent = card
+
+    local barBack = Instance.new("Frame")
+    barBack.Size = UDim2.new(1, -28, 0, 4)
+    barBack.Position = UDim2.new(0, 14, 1, -13)
+    barBack.BackgroundColor3 = Color3.fromRGB(30, 32, 42)
+    barBack.BorderSizePixel = 0
+    barBack.Parent = card
+
+    local bar = Instance.new("Frame")
+    bar.Size = UDim2.new(0, 0, 1, 0)
+    bar.BackgroundColor3 = info.color
+    bar.BorderSizePixel = 0
+    bar.Parent = barBack
+
+    local barCorner = Instance.new("UICorner", bar)
+    barCorner.CornerRadius = UDim.new(1, 0)
+
+    return {
+        card = card,
+        state = state,
+        count = count,
+        level = level,
+        bar = bar,
+        info = info
+    }
+end
+
+for i, info in ipairs(TowerInfo) do
+    towerCards[info.name] = CreateTowerCard(info, i)
+end
+
+local console = Instance.new("Frame")
+console.Size = UDim2.new(1, -40, 0, 70)
+console.Position = UDim2.new(0, 20, 1, -85)
+console.BackgroundColor3 = Color3.fromRGB(5, 6, 9)
+console.BorderSizePixel = 0
+console.Parent = main
+
+local consoleCorner = Instance.new("UICorner", console)
+consoleCorner.CornerRadius = UDim.new(0, 10)
+
+local consoleStroke = Instance.new("UIStroke", console)
+consoleStroke.Color = CYAN
+consoleStroke.Transparency = 0.8
+
+local consoleTitle = Instance.new("TextLabel")
+consoleTitle.Size = UDim2.new(0, 100, 0, 18)
+consoleTitle.Position = UDim2.new(0, 10, 0, 5)
+consoleTitle.BackgroundTransparency = 1
+consoleTitle.Text = "● LIVE DEBUG"
+consoleTitle.Font = Enum.Font.Code
+consoleTitle.TextSize = 9
+consoleTitle.TextXAlignment = Enum.TextXAlignment.Left
+consoleTitle.TextColor3 = CYAN
+consoleTitle.Parent = console
+
+local debugLabel = Instance.new("TextLabel")
+debugLabel.Size = UDim2.new(1, -20, 0, 43)
+debugLabel.Position = UDim2.new(0, 10, 0, 22)
+debugLabel.BackgroundTransparency = 1
+debugLabel.Text = ""
+debugLabel.Font = Enum.Font.Code
+debugLabel.TextSize = 9
+debugLabel.TextXAlignment = Enum.TextXAlignment.Left
+debugLabel.TextYAlignment = Enum.TextYAlignment.Top
+debugLabel.TextColor3 = Color3.fromRGB(130, 150, 175)
+debugLabel.Parent = console
+
+--========================================================--
+-- STAGE UPDATE
+--========================================================--
+
+local function UpdateStage()
+    if not IsInGame() then
+        stageBig.Text = "LOBBY"
+        stageDesc.Text = "SEARCHING FOR TELEPORTER..."
+        progress.Size = UDim2.new(0.05, 0, 1, 0)
+        return
+    end
+
+    local colony = GetCurrentColony()
+    if not colony then
+        stageBig.Text = "LOADING"
+        stageDesc.Text = "WAITING FOR MAP..."
+        progress.Size = UDim2.new(0.15, 0, 1, 0)
+        return
+    end
+
+    if currentStage == 0 then
+        if colony == "Colony5" then
+            stageBig.Text = "STAGE 0 (Colony5)"
+            stageDesc.Text = "DEPLOY STRONGEST SORCERER"
+        else
+            stageBig.Text = "STAGE 0"
+            stageDesc.Text = "DEPLOY HARVESTER CURSE"
+        end
+        progress.Size = UDim2.new(0.2, 0, 1, 0)
+    elseif currentStage == 1 then
+        if colony == "Colony5" then
+            stageBig.Text = "STAGE 1 (Colony5)"
+            stageDesc.Text = "DEPLOY HARVESTER CURSE"
+        else
+            stageBig.Text = "STAGE 1"
+            stageDesc.Text = "BIND KOGANE TO HARVESTER"
+        end
+        progress.Size = UDim2.new(0.45, 0, 1, 0)
+    elseif currentStage == 2 then
+        if colony == "Colony5" then
+            stageBig.Text = "STAGE 2 (Colony5)"
+            stageDesc.Text = "BIND KOGANE TO STRONGEST"
+        else
+            stageBig.Text = "STAGE 2"
+            stageDesc.Text = "DEPLOY JUSTICE SORCERER"
+        end
+        progress.Size = UDim2.new(0.65, 0, 1, 0)
+    elseif currentStage == 3 then
+        if colony == "Colony5" then
+            stageBig.Text = "STAGE 3 (Colony5)"
+            stageDesc.Text = "DEPLOY JUSTICE SORCERER"
+        else
+            stageBig.Text = "STAGE 3"
+            stageDesc.Text = "FULL AUTOMATION ACTIVE"
+        end
+        progress.Size = UDim2.new(0.8, 0, 1, 0)
+    elseif currentStage >= 4 then
+        stageBig.Text = "STAGE 4 (Colony5)"
+        stageDesc.Text = "DEPLOY AGENT SORCERER"
+        progress.Size = UDim2.new(0.9, 0, 1, 0)
+    end
+end
+
+--========================================================--
+-- UI UPDATE
+--========================================================--
+
+local function UpdateUI()
+    local inGame = IsInGame()
+    local colony = GetCurrentColony()
+
+    if colony then
+        statusDot.BackgroundColor3 = GREEN
+        statusText.Text = "SYSTEM ONLINE"
+        statusText.TextColor3 = GREEN
+    elseif inGame then
+        statusDot.BackgroundColor3 = YELLOW
+        statusText.Text = "LOADING WORLD"
+        statusText.TextColor3 = YELLOW
+    else
+        statusDot.BackgroundColor3 = CYAN
+        statusText.Text = "STANDBY"
+        statusText.TextColor3 = CYAN
+    end
+
+    mapValue.Text = colony or "WAITING"
+    mapValue.TextColor3 = colony and GREEN or YELLOW
+
+    local character = LocalPlayer.Character
+    playerValue.Text = character and character:FindFirstChild("HumanoidRootPart") and "READY" or "LOADING"
+    playerValue.TextColor3 = character and GREEN or YELLOW
+
+    remoteValue.Text = GetTeleportersRemote() and "CONNECTED" or "WAITING"
+    remoteValue.TextColor3 = GetTeleportersRemote() and GREEN or YELLOW
+
+    timerValue.Text = string.format("%02d:%02d", math.floor((tick() - StartTime) / 60), math.floor((tick() - StartTime) % 60))
+
+    local tp = currentTeleporter
+    teleporterValue.Text = tp and tp.Name or "--"
+
+    for name, card in pairs(towerCards) do
+        card.card.Visible = colony ~= nil
+
+        if colony then
+            local count = GetTowerCount(name)
+            local max = card.info.max
+
+            local levels = GetTowerLevels(name)
+
+            card.count.Text = tostring(count) .. " / " .. tostring(max)
+
+            if #levels > 0 then
+                card.level.Text = "LEVEL  " .. table.concat(levels, "  /  ")
+            else
+                card.level.Text = "LEVEL  --"
+            end
+
+            local ratio = math.clamp(count / max, 0, 1)
+            TweenService:Create(card.bar, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+                Size = UDim2.new(ratio, 0, 1, 0)
+            }):Play()
+
+            if count >= max then
+                card.state.Text = "ONLINE"
+                card.state.TextColor3 = GREEN
+            elseif count > 0 then
+                card.state.Text = "ACTIVE"
+                card.state.TextColor3 = CYAN
+            else
+                card.state.Text = "WAITING"
+                card.state.TextColor3 = YELLOW
+            end
+        end
+    end
+
+    local lines = {}
+    for i = 1, math.min(#DebugMessages, MAX_DEBUG) do
+        local d = DebugMessages[i]
+        table.insert(lines, "[" .. d.time .. "] " .. d.text)
+    end
+    debugLabel.Text = table.concat(lines, "\n")
+
+    UpdateStage()
+end
+
+--========================================================--
+-- DRAG
+--========================================================--
+
+local dragging = false
+local dragStart
+local startPosition
+
+header.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        dragging = true
+        dragStart = input.Position
+        startPosition = main.Position
+    end
+end)
+
+header.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        dragging = false
+    end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+    if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+        local delta = input.Position - dragStart
+        main.Position = UDim2.new(
+            startPosition.X.Scale,
+            startPosition.X.Offset + delta.X,
+            startPosition.Y.Scale,
+            startPosition.Y.Offset + delta.Y
+        )
+    end
+end)
+
+--========================================================--
+-- FLOAT BUTTON
+--========================================================--
+
+local toggleGui = Instance.new("ScreenGui")
+toggleGui.Name = "NexusToggle"
+toggleGui.ResetOnSpawn = false
+toggleGui.IgnoreGuiInset = true
+toggleGui.DisplayOrder = 10000
+toggleGui.Parent = PlayerGui
+
+local toggle = Instance.new("TextButton")
+toggle.Size = UDim2.new(0, 52, 0, 52)
+toggle.Position = UDim2.new(1, -72, 1, -75)
+toggle.BackgroundColor3 = BG
+toggle.BorderSizePixel = 0
+toggle.Text = "N"
+toggle.TextColor3 = CYAN
+toggle.Font = Enum.Font.GothamBlack
+toggle.TextSize = 20
+toggle.Parent = toggleGui
+
+local toggleCorner = Instance.new("UICorner", toggle)
+toggleCorner.CornerRadius = UDim.new(1, 0)
+
+local toggleStroke = Instance.new("UIStroke", toggle)
+toggleStroke.Color = CYAN
+toggleStroke.Thickness = 1.5
+toggleStroke.Transparency = 0.2
+
+local visible = true
+
+toggle.MouseButton1Click:Connect(function()
+    visible = not visible
+    main.Visible = visible
+    if visible then
+        toggle.Text = "N"
+        toggle.TextColor3 = CYAN
+    else
+        toggle.Text = "N"
+        toggle.TextColor3 = PURPLE
+    end
+end)
+
+--========================================================--
+-- UPDATE LOOP
+--========================================================--
+
+task.spawn(function()
+    while running do
+        task.wait(0.5)
+        pcall(function()
+            UpdateUI()
+        end)
+    end
+end)
+
+--========================================================--
+-- MAP LOADING
+--========================================================--
+
+Workspace.ChildAdded:Connect(function(child)
+    if not running then return end
+    if child.Name == "Map" then
+        AddDebug("Map container detected")
+    elseif child.Name == "CullingGamesTeleporters" then
+        AddDebug("Teleporters detected")
+    elseif child.Name == "Towers" then
+        AddDebug("Tower container detected")
+    end
+end)
+
+LocalPlayer.CharacterAdded:Connect(function()
+    AddDebug("Character respawn detected")
+end)
+
+--========================================================--
+-- INITIAL DEBUG
+--========================================================--
+
+AddDebug("NEXUS automation initialized")
+AddDebug("Waiting for game objects...")
+AddDebug("🔹 阶段顺序: Colony1-4: Harvester→Kogane(绑定Harvester)→Justice→Agent+Strongest")
+AddDebug("🔹 Colony5: Strongest→Harvester→Kogane(绑定Strongest)→Justice→Agent")
+AddDebug("🔹 支持 Colony1~5 自动识别")
+AddDebug("🔹 Colony5 坐标: -14.18, 47.84, -134.53")
+AddDebug("🔹 UI 已移至屏幕顶端")
+
+print("==============================================")
+print(" NEXUS // CULLING AUTOMATION v3.6")
+print(" Advanced Black-Tech HUD")
+print(" UI initialized")
+print(" Remote loading is non-blocking")
+print(" Colony1~5 auto-detected with special logic for Colony5")
+print(" Kogane绑定的目标: Colony5→Strongest, 其他→Harvester")
+print("==============================================")
