@@ -127,7 +127,6 @@ local POSITIONS = {
         GOJO = CFrame.new(-24.43, 25.59, -111.47),
         KING = CFrame.new(-24.43, 25.59, -111.47)
     },
-    -- 新增 Gojo 地图坐标
     Gojo = {
         BASIC = CFrame.new(-30.23, 5.94, -73.35),
         CHEAP = CFrame.new(-2.70, 5.39, -46.99),
@@ -524,6 +523,7 @@ task.spawn(function()
     end
 end)
 
+-- ==================== 放置塔（关键修改：Gojo地图不调用 ChangeTowerMode） ====================
 local function PlaceTower(nameKey)
     if _G.stopAll then return false end
     local towerName = TOWER_NAMES[nameKey]
@@ -550,23 +550,29 @@ local function PlaceTower(nameKey)
         print("[系统] King已放置")
     end
     
-    -- 放置成功后，调用 ChangeTowerMode 3次
-    task.spawn(function()
-        pcall(function()
-            local towersFolder = Workspace:FindFirstChild("Towers")
-            if towersFolder then
-                for _, t in ipairs(towersFolder:GetChildren()) do
-                    if t.Name:find(towerName) then
-                        for i = 1, 3 do
-                            ChangeTowerMode:InvokeServer(t)
-                            task.wait(0.1)
+    -- 修改点：如果是 Gojo 地图，不调用 ChangeTowerMode
+    if currentMap ~= "Gojo" then
+        -- 放置成功后，调用 ChangeTowerMode 3次（原逻辑）
+        task.spawn(function()
+            pcall(function()
+                local towersFolder = Workspace:FindFirstChild("Towers")
+                if towersFolder then
+                    for _, t in ipairs(towersFolder:GetChildren()) do
+                        if t.Name:find(towerName) then
+                            for i = 1, 3 do
+                                ChangeTowerMode:InvokeServer(t)
+                                task.wait(0.1)
+                            end
+                            break
                         end
-                        break
                     end
                 end
-            end
+            end)
         end)
-    end)
+    else
+        -- Gojo 地图：跳过 ChangeTowerMode
+        print("[系统] Gojo地图，跳过攻击模式设置")
+    end
     
     return true
 end
