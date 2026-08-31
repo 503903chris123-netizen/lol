@@ -126,6 +126,14 @@ local POSITIONS = {
         B85 = CFrame.new(-24.43, 25.59, -111.47),
         GOJO = CFrame.new(-24.43, 25.59, -111.47),
         KING = CFrame.new(-24.43, 25.59, -111.47)
+    },
+    -- 新增 Gojo 地图坐标
+    Gojo = {
+        BASIC = CFrame.new(-30.23, 5.94, -73.35),
+        CHEAP = CFrame.new(-2.70, 5.39, -46.99),
+        B85 = CFrame.new(-31.76, 5.94, -47.77),
+        GOJO = CFrame.new(-31.76, 5.94, -47.77),
+        KING = CFrame.new(-31.76, 5.94, -47.77)
     }
 }
 
@@ -146,6 +154,8 @@ local function DetectMap()
         return "Dagon"
     elseif map:FindFirstChild("Meguna") then
         return "Meguna"
+    elseif map:FindFirstChild("Gojo") then
+        return "Gojo"
     end
     return nil
 end
@@ -181,8 +191,8 @@ end
 local function AllMiracleAtLeast(level)
     local miracles = GetTowersByName(TOWER_NAMES.BASIC)
     if #miracles < 2 then return false end
-    for _, t in ipairs(miracles) do
-        if GetTowerLevel(t) < level then
+    for _, m in ipairs(miracles) do
+        if GetTowerLevel(m) < level then
             return false
         end
     end
