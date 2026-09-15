@@ -23,14 +23,24 @@ local LocalPlayer = Players.LocalPlayer
 local Gold = LocalPlayer:WaitForChild("Gold")
 local Functions = ReplicatedStorage:WaitForChild("Functions")
 local Remotes = ReplicatedStorage:WaitForChild("Remotes")
+
 local SpawnNewTower = Functions:WaitForChild("SpawnNewTower")
 local UpgradeTower = Functions:WaitForChild("UpgradeTower")
 local SellTower = Functions:WaitForChild("SellTower")
 local AutoSkip = Remotes:WaitForChild("AutoSkip")
 local GetAllData = Remotes:WaitForChild("GetAllData")
-local DomainActiveRemote = Remotes:WaitForChild("Towers"):WaitForChild("KingOfCursesEvo"):WaitForChild("DomainActive")
+
+local DomainActiveRemote =
+    Remotes:WaitForChild("Towers")
+    :WaitForChild("KingOfCursesEvo")
+    :WaitForChild("DomainActive")
+
 local GojoDomain = Remotes:WaitForChild("GojoDomain")
 local ChangeTowerMode = Functions:WaitForChild("ChangeTowerMode")
+
+--========================================================--
+--                     塔名称
+--========================================================--
 
 local TOWER_NAMES = {
     BASIC = "MiracleSorcerer",
@@ -40,33 +50,56 @@ local TOWER_NAMES = {
     KING = "KingOfCursesEvo"
 }
 
+--========================================================--
+--                     UUID 缓存
+--========================================================--
+
 local uuidCache = {}
 local lastRefresh = 0
 
 local function RefreshTowerData(force)
     local now = tick()
+
     if not force and now - lastRefresh < 3 then
         return next(uuidCache) ~= nil
     end
+
     local ok, data = pcall(function()
         return GetAllData:InvokeServer()
     end)
-    if not ok or type(data) ~= "table" or type(data.Towers) ~= "table" then
+
+    if not ok
+        or type(data) ~= "table"
+        or type(data.Towers) ~= "table" then
         return false
     end
+
     lastRefresh = now
+
     local byName = {}
+
     for _, t in pairs(data.Towers) do
-        if type(t) == "table" and t.Name and t.UUID then
+        if type(t) == "table"
+            and t.Name
+            and t.UUID then
+
             local cur = byName[t.Name]
-            if not cur or (t.Equipped and not cur.Equipped) then
-                byName[t.Name] = { UUID = t.UUID, Equipped = t.Equipped and true or false }
+
+            if not cur
+                or (t.Equipped and not cur.Equipped) then
+
+                byName[t.Name] = {
+                    UUID = t.UUID,
+                    Equipped = t.Equipped and true or false
+                }
             end
         end
     end
+
     for name, info in pairs(byName) do
         uuidCache[name] = info.UUID
     end
+
     return true
 end
 
@@ -74,6 +107,7 @@ local function ResolveUUID(towerName)
     if not uuidCache[towerName] then
         RefreshTowerData(true)
     end
+
     return uuidCache[towerName]
 end
 
@@ -81,10 +115,16 @@ task.spawn(function()
     while not RefreshTowerData(true) do
         task.wait(1)
     end
+
     print("[系统] 玩家塔数据已加载")
 end)
 
+--========================================================--
+--                     地图坐标
+--========================================================--
+
 local POSITIONS = {
+
     Jogo = {
         BASIC = CFrame.new(-42.24, 13, -108.03),
         CHEAP = CFrame.new(-31.248558044433594, 13.275632858276367, -142.10992431640625),
@@ -92,6 +132,7 @@ local POSITIONS = {
         GOJO = CFrame.new(-3.71, 14.77, -106.33),
         KING = CFrame.new(-3.71, 14.77, -106.33)
     },
+
     JujutsuHigh = {
         BASIC = CFrame.new(-23.73, 15.21, -83.58),
         CHEAP = CFrame.new(31.04, 14.91, -14.07),
@@ -99,6 +140,7 @@ local POSITIONS = {
         GOJO = CFrame.new(-14.10, 15.06, -98.60),
         KING = CFrame.new(-14.10, 15.06, -98.60)
     },
+
     Toji = {
         BASIC = CFrame.new(-31.11, 8.60, -34.43),
         CHEAP = CFrame.new(-111.80, 8.60, -63.30),
@@ -106,6 +148,7 @@ local POSITIONS = {
         GOJO = CFrame.new(-40.19, 8.60, -61.18),
         KING = CFrame.new(-40.19, 8.60, -61.18)
     },
+
     Beach = {
         BASIC = CFrame.new(57.55, 10.45, -162.00),
         CHEAP = CFrame.new(93.45, 10.21, -138.19),
@@ -113,6 +156,7 @@ local POSITIONS = {
         GOJO = CFrame.new(51.32, 10.24, -128.84),
         KING = CFrame.new(51.32, 10.24, -128.84)
     },
+
     Dagon = {
         BASIC = CFrame.new(1.46, 53.80, -89.49),
         CHEAP = CFrame.new(-8.60, 59.32, -152.34),
@@ -120,6 +164,7 @@ local POSITIONS = {
         GOJO = CFrame.new(-22.31, 53.88, -102.14),
         KING = CFrame.new(-22.31, 53.88, -102.14)
     },
+
     Meguna = {
         BASIC = CFrame.new(-41.10, 25.59, -180.09),
         CHEAP = CFrame.new(16.74, 29.04, -154.48),
@@ -127,35 +172,58 @@ local POSITIONS = {
         GOJO = CFrame.new(-24.43, 25.59, -111.47),
         KING = CFrame.new(-24.43, 25.59, -111.47)
     },
-    Gojo = {
-        BASIC = CFrame.new(-30.23, 5.94, -73.35),
-        CHEAP = CFrame.new(-2.70, 5.39, -46.99),
-        B85 = CFrame.new(-31.76, 5.94, -47.77),
-        GOJO = CFrame.new(-31.76, 5.94, -47.77),
-        KING = CFrame.new(-31.76, 5.94, -47.77)
+
+    --==================================================--
+    --                     Shibuya
+    --==================================================--
+
+    Shibuya = {
+        -- 奇迹单独放这里
+        BASIC = CFrame.new(126, 38, -133),
+
+        -- 其他全部放这里
+        CHEAP = CFrame.new(113, 38, -131),
+        B85 = CFrame.new(113, 38, -131),
+        GOJO = CFrame.new(113, 38, -131),
+        KING = CFrame.new(113, 38, -131)
     }
 }
 
 local currentMap = nil
 
+--========================================================--
+--                     地图检测
+--========================================================--
+
 local function DetectMap()
     local map = Workspace:FindFirstChild("Map")
-    if not map then return nil end
+
+    if not map then
+        return nil
+    end
+
     if map:FindFirstChild("Jogo") then
         return "Jogo"
+
     elseif map:FindFirstChild("JujutsuHigh") then
         return "JujutsuHigh"
+
     elseif map:FindFirstChild("Toji") then
         return "Toji"
+
     elseif map:FindFirstChild("Beach") then
         return "Beach"
+
     elseif map:FindFirstChild("Dagon") then
         return "Dagon"
+
     elseif map:FindFirstChild("Meguna") then
         return "Meguna"
-    elseif map:FindFirstChild("Gojo") then
-        return "Gojo"
+
+    elseif map:FindFirstChild("Shibuya") then
+        return "Shibuya"
     end
+
     return nil
 end
 
@@ -167,36 +235,64 @@ local function GetPositions()
     if not currentMap then
         currentMap = DetectMap()
     end
+
     return POSITIONS[currentMap]
 end
+
+--========================================================--
+--                     塔等级
+--========================================================--
 
 local function GetTowerLevel(tower)
     local level = tonumber(string.match(tower.Name, "%d+"))
     return level or 1
 end
 
+--========================================================--
+--                     获取塔
+--========================================================--
+
 local function GetTowersByName(name)
     local towers = Workspace:FindFirstChild("Towers")
-    if not towers then return {} end
+
+    if not towers then
+        return {}
+    end
+
     local result = {}
+
     for _, t in ipairs(towers:GetChildren()) do
         if t.Name:find(name) then
             table.insert(result, t)
         end
     end
+
     return result
 end
 
+--========================================================--
+--                     奇迹检查
+--========================================================--
+
 local function AllMiracleAtLeast(level)
     local miracles = GetTowersByName(TOWER_NAMES.BASIC)
-    if #miracles < 2 then return false end
-    for _, m in ipairs(miracles) do
-        if GetTowerLevel(m) < level then
+
+    if #miracles < 2 then
+        return false
+    end
+
+    for _, t in ipairs(miracles) do
+        if GetTowerLevel(t) < level then
             return false
         end
     end
+
     return true
 end
+
+--========================================================--
+--                     UI
+--========================================================--
 
 local gui = Instance.new("ScreenGui")
 gui.Name = "TowerProUI"
@@ -261,10 +357,13 @@ layout.Padding = UDim.new(0, 10)
 layout.Parent = scroll
 
 local function CreateCard(towerName, color)
+
     local card = Instance.new("Frame")
     card.Size = UDim2.new(1, 0, 0, 110)
     card.BackgroundColor3 = Color3.fromRGB(28, 28, 35)
     card.BorderSizePixel = 0
+    card.Parent = scroll
+
     Instance.new("UICorner", card).CornerRadius = UDim.new(0, 8)
 
     local cardStroke = Instance.new("UIStroke", card)
@@ -310,8 +409,23 @@ local function CreateCard(towerName, color)
 end
 
 local cards = {}
-local displayNames = {"奇迹巫师", "特工巫师", "五条悟", "暗影宿傩", "宿傩(冰冻)"}
-local cardKeys = {"Miracle", "Agent", "Gojo", "King", "Red"}
+
+local displayNames = {
+    "奇迹巫师",
+    "特工巫师",
+    "五条悟",
+    "暗影宿傩",
+    "宿傩(冰冻)"
+}
+
+local cardKeys = {
+    "Miracle",
+    "Agent",
+    "Gojo",
+    "King",
+    "Red"
+}
+
 local colors = {
     Color3.fromRGB(0, 200, 255),
     Color3.fromRGB(100, 180, 250),
@@ -321,10 +435,20 @@ local colors = {
 }
 
 for i, key in ipairs(cardKeys) do
-    local card, detail, nextLbl = CreateCard(displayNames[i], colors[i])
-    card.Parent = scroll
-    cards[key] = {card = card, detail = detail, next = nextLbl}
+
+    local card, detail, nextLbl =
+        CreateCard(displayNames[i], colors[i])
+
+    cards[key] = {
+        card = card,
+        detail = detail,
+        next = nextLbl
+    }
 end
+
+--========================================================--
+--                     Toggle
+--========================================================--
 
 local toggleGui = Instance.new("ScreenGui")
 toggleGui.Name = "ToggleUI"
@@ -340,24 +464,42 @@ toggleBtn.Font = Enum.Font.GothamBold
 toggleBtn.TextSize = 22
 toggleBtn.BorderSizePixel = 0
 toggleBtn.Parent = toggleGui
+
 Instance.new("UICorner", toggleBtn).CornerRadius = UDim.new(1, 0)
 
 local uiVisible = true
+
 toggleBtn.MouseButton1Click:Connect(function()
+
     uiVisible = not uiVisible
+
     main.Visible = uiVisible
     toggleBtn.Text = uiVisible and "◉" or "⊙"
 end)
 
+--========================================================--
+--                     UI 更新
+--========================================================--
+
 local function UpdateUI()
+
     if not IsInGame() then
         stageLabel.Text = "等待进入游戏..."
         return
     end
 
-    local timer = Workspace:FindFirstChild("Info") and Workspace.Info:FindFirstChild("Time") and Workspace.Info.Time:FindFirstChild("Timer")
-    if timer then
-        timeLabel.Text = tostring(timer.Value)
+    local info = Workspace:FindFirstChild("Info")
+
+    if info then
+        local time = info:FindFirstChild("Time")
+
+        if time then
+            local timer = time:FindFirstChild("Timer")
+
+            if timer then
+                timeLabel.Text = tostring(timer.Value)
+            end
+        end
     end
 
     local miracles = GetTowersByName(TOWER_NAMES.BASIC)
@@ -367,11 +509,15 @@ local function UpdateUI()
     local b85s = GetTowersByName(TOWER_NAMES.B85)
 
     local function getLevels(towers)
+
         local levels = {}
+
         for _, t in ipairs(towers) do
             table.insert(levels, GetTowerLevel(t))
         end
+
         table.sort(levels)
+
         return levels
     end
 
@@ -382,268 +528,534 @@ local function UpdateUI()
     local bLevels = getLevels(b85s)
 
     local function formatDetail(count, levels, target, extra)
-        local levelStr = (#levels > 0) and table.concat(levels, "、") or "无"
-        return string.format("数量:%d / %d\n等级:%s\n%s", count, target, levelStr, extra or "")
+
+        local levelStr =
+            (#levels > 0)
+            and table.concat(levels, "、")
+            or "无"
+
+        return string.format(
+            "数量:%d / %d\n等级:%s\n%s",
+            count,
+            target,
+            levelStr,
+            extra or ""
+        )
     end
 
-    cards.Miracle.detail.Text = formatDetail(#miracles, mLevels, 2, _G.miraclePhaseComplete and "✓ 完成" or "阶段1")
-    cards.Miracle.next.Text = _G.miraclePhaseComplete and "完成" or (#miracles < 2 and "放置" or "升级")
+    cards.Miracle.detail.Text =
+        formatDetail(
+            #miracles,
+            mLevels,
+            2,
+            _G.miraclePhaseComplete
+            and "✓ 完成"
+            or "阶段1"
+        )
 
-    cards.Agent.detail.Text = formatDetail(#agents, aLevels, 4, _G.miraclePhaseComplete and _G.frostPlaced and "可放置" or "等待")
-    cards.Agent.next.Text = (_G.miraclePhaseComplete and _G.frostPlaced) and (#agents < 4 and "放置" or "升级") or "等待"
+    cards.Miracle.next.Text =
+        _G.miraclePhaseComplete
+        and "完成"
+        or (#miracles < 2 and "放置" or "升级")
 
-    cards.Gojo.detail.Text = formatDetail(#gojos, gLevels, 1, _G.miraclePhaseComplete and _G.frostPlaced and "可放置" or "等待")
-    cards.Gojo.next.Text = (_G.miraclePhaseComplete and _G.frostPlaced) and (#gojos == 0 and "放置" or "已放置") or "等待"
+    cards.Agent.detail.Text =
+        formatDetail(
+            #agents,
+            aLevels,
+            4,
+            _G.miraclePhaseComplete
+            and _G.frostPlaced
+            and "可放置"
+            or "等待"
+        )
 
-    cards.King.detail.Text = formatDetail(#kings, kLevels, 1, _G.miraclePhaseComplete and _G.frostPlaced and "可放置" or "等待")
-    cards.King.next.Text = (_G.miraclePhaseComplete and _G.frostPlaced) and (#kings == 0 and "放置" or "已放置") or "等待"
+    cards.Agent.next.Text =
+        (_G.miraclePhaseComplete and _G.frostPlaced)
+        and (#agents < 4 and "放置" or "升级")
+        or "等待"
 
-    cards.Red.detail.Text = formatDetail(#b85s, bLevels, 1, "不升级")
-    cards.Red.next.Text = _G.frostPlaced and "已放置" or "优先放置"
+    cards.Gojo.detail.Text =
+        formatDetail(
+            #gojos,
+            gLevels,
+            1,
+            _G.miraclePhaseComplete
+            and _G.frostPlaced
+            and "可放置"
+            or "等待"
+        )
+
+    cards.Gojo.next.Text =
+        (_G.miraclePhaseComplete and _G.frostPlaced)
+        and (#gojos == 0 and "放置" or "已放置")
+        or "等待"
+
+    cards.King.detail.Text =
+        formatDetail(
+            #kings,
+            kLevels,
+            1,
+            _G.miraclePhaseComplete
+            and _G.frostPlaced
+            and "可放置"
+            or "等待"
+        )
+
+    cards.King.next.Text =
+        (_G.miraclePhaseComplete and _G.frostPlaced)
+        and (#kings == 0 and "放置" or "已放置")
+        or "等待"
+
+    cards.Red.detail.Text =
+        formatDetail(
+            #b85s,
+            bLevels,
+            1,
+            "不升级"
+        )
+
+    cards.Red.next.Text =
+        _G.frostPlaced
+        and "已放置"
+        or "优先放置"
 
     local phaseText = ""
+
     if _G.stopAll then
+
         phaseText = "⛔ 已停止 - Wave 50+"
+
     elseif not _G.miraclePhaseComplete then
+
         phaseText = "阶段1: 奇迹建造"
+
     elseif not _G.frostPlaced then
+
         phaseText = "阶段2: 放置冰冻宿傩"
+
     else
+
         phaseText = "阶段3: 全面部署"
     end
+
     stageLabel.Text = phaseText
 
-    scroll.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y + 15)
+    scroll.CanvasSize =
+        UDim2.new(
+            0,
+            0,
+            0,
+            layout.AbsoluteContentSize.Y + 15
+        )
 end
 
 task.spawn(function()
+
     while task.wait(0.5) do
         pcall(UpdateUI)
     end
+
 end)
 
--- ==================== 检测 ImmortalSnail ====================
+--========================================================--
+--                     ImmortalSnail
+--========================================================--
+
 local function CheckSnail()
+
     local mobs = Workspace:FindFirstChild("Mobs")
+
     if mobs then
+
         local snail = mobs:FindFirstChild("ImmortalSnail")
+
         if snail then
             _G.snailPresent = true
             _G.upgradeBlocked = true
             return true
         end
     end
+
     _G.snailPresent = false
     _G.upgradeBlocked = false
+
     return false
 end
 
--- ==================== 升级函数 ====================
+task.spawn(function()
+
+    while task.wait(0.5) do
+
+        if IsInGame() then
+            pcall(CheckSnail)
+        end
+
+    end
+
+end)
+
+--========================================================--
+--                     升级
+--========================================================--
+
 local function UpgradeLoop()
-    if _G.stopAll then return end
-    
-    local towersFolder = Workspace:FindFirstChild("Towers")
-    if not towersFolder then return end
+
+    if _G.stopAll then
+        return
+    end
+
+    local towersFolder =
+        Workspace:FindFirstChild("Towers")
+
+    if not towersFolder then
+        return
+    end
 
     local miracles = {}
-    local others = {} -- 存储所有非奇迹塔
+    local others = {}
+
     for _, t in ipairs(towersFolder:GetChildren()) do
+
         if t.Name:find(TOWER_NAMES.BASIC) then
             table.insert(miracles, t)
         else
             table.insert(others, t)
         end
+
     end
 
-    -- 第一步：奇迹升级（始终优先，不受snail影响）
+    --==================================================--
+    -- 奇迹阶段
+    --==================================================--
+
     if not _G.miraclePhaseComplete then
+
         if #miracles < 2 then
+
             for _, t in ipairs(miracles) do
+
                 if GetTowerLevel(t) < 4 then
-                    pcall(function() UpgradeTower:InvokeServer(t) end)
+
+                    pcall(function()
+                        UpgradeTower:InvokeServer(t)
+                    end)
+
                     return
                 end
             end
+
             return
         end
-        table.sort(miracles, function(a, b) return GetTowerLevel(a) < GetTowerLevel(b) end)
 
+        table.sort(
+            miracles,
+            function(a, b)
+                return GetTowerLevel(a) < GetTowerLevel(b)
+            end
+        )
+
+        -- 全部至少 2
         for _, t in ipairs(miracles) do
+
             if GetTowerLevel(t) < 2 then
-                pcall(function() UpgradeTower:InvokeServer(t) end)
+
+                pcall(function()
+                    UpgradeTower:InvokeServer(t)
+                end)
+
                 return
             end
         end
+
+        -- 全部至少 4
         for _, t in ipairs(miracles) do
+
             if GetTowerLevel(t) < 4 then
-                pcall(function() UpgradeTower:InvokeServer(t) end)
+
+                pcall(function()
+                    UpgradeTower:InvokeServer(t)
+                end)
+
                 return
             end
         end
+
         if AllMiracleAtLeast(4) then
+
             _G.miraclePhaseComplete = true
+
             print("[系统] 奇迹阶段完成")
         end
+
         return
     end
 
-    -- 第二步：奇迹完成，升级其他塔
+    --==================================================--
+    -- 其他塔升级
+    --==================================================--
+
     for _, t in ipairs(others) do
-        local id = t.Name:match("^[^%d]+") -- 获取纯名称（去掉数字等级后缀）
-        -- 判断是否为三个受snail影响的塔
-        local isSnailAffected = (string.find(t.Name, TOWER_NAMES.B85) or 
-                                 string.find(t.Name, TOWER_NAMES.GOJO) or 
-                                 string.find(t.Name, TOWER_NAMES.KING))
-        
-        -- 如果snail存在且该塔受snail影响，则跳过升级
+
+        local isSnailAffected =
+            string.find(t.Name, TOWER_NAMES.B85)
+            or string.find(t.Name, TOWER_NAMES.GOJO)
+            or string.find(t.Name, TOWER_NAMES.KING)
+
         if _G.upgradeBlocked and isSnailAffected then
             continue
         end
-        
-        -- 否则正常升级（所有其他塔，包括特工和未受影响的）
-        pcall(function() UpgradeTower:InvokeServer(t) end)
-        task.wait(0.05) -- 避免请求过快
+
+        pcall(function()
+            UpgradeTower:InvokeServer(t)
+        end)
+
+        task.wait(0.05)
     end
 end
 
 task.spawn(function()
+
     while task.wait(0.3) do
+
         if IsInGame() and not _G.stopAll then
             pcall(UpgradeLoop)
         end
+
     end
+
 end)
 
--- ==================== ImmortalSnail 持续监控 ====================
-task.spawn(function()
-    while task.wait(0.5) do
-        if IsInGame() then
-            pcall(CheckSnail)
-        end
-    end
-end)
+--========================================================--
+--                     放置塔
+--========================================================--
 
--- ==================== 放置塔（关键修改：Gojo地图不调用 ChangeTowerMode） ====================
 local function PlaceTower(nameKey)
-    if _G.stopAll then return false end
+
+    if _G.stopAll then
+        return false
+    end
+
     local towerName = TOWER_NAMES[nameKey]
-    if not towerName then return false end
+
+    if not towerName then
+        return false
+    end
+
     local posTable = GetPositions()
-    if not posTable then return false end
+
+    if not posTable then
+        return false
+    end
+
     local pos = posTable[nameKey]
-    if not pos then return false end
+
+    if not pos then
+        return false
+    end
+
     local u = ResolveUUID(towerName)
-    if not u then return false end
+
+    if not u then
+        return false
+    end
+
     local ok, ret = pcall(function()
         return SpawnNewTower:InvokeServer(u, pos)
     end)
+
     if not (ok and ret) then
+
         if uuidCache[towerName] then
             uuidCache[towerName] = nil
             RefreshTowerData()
         end
+
         return false
     end
-    
+
     if nameKey == "KING" then
+
         _G.kingPlaced = true
+
         print("[系统] King已放置")
     end
-    
-    -- 修改点：如果是 Gojo 地图，不调用 ChangeTowerMode
-    if currentMap ~= "Gojo" then
-        -- 放置成功后，调用 ChangeTowerMode 3次（原逻辑）
-        task.spawn(function()
-            pcall(function()
-                local towersFolder = Workspace:FindFirstChild("Towers")
-                if towersFolder then
-                    for _, t in ipairs(towersFolder:GetChildren()) do
-                        if t.Name:find(towerName) then
-                            for i = 1, 3 do
-                                ChangeTowerMode:InvokeServer(t)
-                                task.wait(0.1)
-                            end
-                            break
-                        end
+
+    --==================================================--
+    -- 放置成功后 ChangeTowerMode 3 次
+    --==================================================--
+
+    task.spawn(function()
+
+        pcall(function()
+
+            local towersFolder =
+                Workspace:FindFirstChild("Towers")
+
+            if not towersFolder then
+                return
+            end
+
+            for _, t in ipairs(towersFolder:GetChildren()) do
+
+                if t.Name:find(towerName) then
+
+                    for i = 1, 3 do
+
+                        ChangeTowerMode:InvokeServer(t)
+
+                        task.wait(0.1)
                     end
+
+                    break
                 end
-            end)
+            end
         end)
-    else
-        -- Gojo 地图：跳过 ChangeTowerMode
-        print("[系统] Gojo地图，跳过攻击模式设置")
-    end
-    
+    end)
+
     return true
 end
 
+--========================================================--
+--                     AutoSkip
+--========================================================--
+
 local function AutoSkipOnce()
-    if _G.autoSkipCalled then return end
-    if not IsInGame() then return end
+
+    if _G.autoSkipCalled then
+        return
+    end
+
+    if not IsInGame() then
+        return
+    end
+
     pcall(function()
+
         AutoSkip:FireServer()
+
         _G.autoSkipCalled = true
+
         print("[系统] AutoSkip 已调用一次")
     end)
 end
 
 task.spawn(function()
+
     while task.wait(1) do
+
         if not _G.autoSkipCalled then
             pcall(AutoSkipOnce)
         end
+
     end
+
 end)
 
-local function ProcessFlow()
-    if _G.stopAll then return end
-    if not IsInGame() then return end
+--========================================================--
+--                     主流程
+--========================================================--
 
-    if environment.Stage == 0 then
-        PlaceTower("BASIC")
-        task.wait(0.1)
-        PlaceTower("BASIC")
-        environment.Stage = 1
+local function ProcessFlow()
+
+    if _G.stopAll then
         return
     end
+
+    if not IsInGame() then
+        return
+    end
+
+    --==================================================--
+    -- Stage 0：两个奇迹
+    --==================================================--
+
+    if environment.Stage == 0 then
+
+        PlaceTower("BASIC")
+
+        task.wait(0.1)
+
+        PlaceTower("BASIC")
+
+        environment.Stage = 1
+
+        return
+    end
+
+    --==================================================--
+    -- 等待奇迹全部升级
+    --==================================================--
 
     if not _G.miraclePhaseComplete then
         return
     end
 
+    --==================================================--
+    -- 阶段2：冰冻宿傩
+    --==================================================--
+
     if not _G.frostPlaced then
-        local b85s = GetTowersByName(TOWER_NAMES.B85)
+
+        local b85s =
+            GetTowersByName(TOWER_NAMES.B85)
+
         if #b85s < 1 then
+
             PlaceTower("B85")
+
             task.wait(0.1)
+
         else
+
             _G.frostPlaced = true
+
             print("[系统] 冰冻宿傩已放置")
         end
+
         return
     end
 
-    local agents = GetTowersByName(TOWER_NAMES.CHEAP)
-    local gojos = GetTowersByName(TOWER_NAMES.GOJO)
-    local kings = GetTowersByName(TOWER_NAMES.KING)
+    --==================================================--
+    -- 阶段3
+    --==================================================--
 
+    local agents =
+        GetTowersByName(TOWER_NAMES.CHEAP)
+
+    local gojos =
+        GetTowersByName(TOWER_NAMES.GOJO)
+
+    local kings =
+        GetTowersByName(TOWER_NAMES.KING)
+
+    -- 4 特工
     if #agents < 4 then
+
         PlaceTower("CHEAP")
+
         task.wait(0.1)
     end
 
+    -- 1 五条
     if #gojos < 1 then
+
         PlaceTower("GOJO")
+
         task.wait(0.1)
     end
 
-    -- King 优先放置（如果还没放）
+    -- 1 King
     if #kings < 1 and not _G.kingPlaced then
+
         PlaceTower("KING")
+
         task.wait(0.1)
     end
 
-    local miracles = GetTowersByName(TOWER_NAMES.BASIC)
+    -- 如果奇迹数量不足，补奇迹
+    local miracles =
+        GetTowersByName(TOWER_NAMES.BASIC)
+
     if #miracles < 2 and Gold.Value >= 300 then
         PlaceTower("BASIC")
     end
@@ -652,69 +1064,125 @@ end
 Gold.Changed:Connect(ProcessFlow)
 
 task.spawn(function()
+
     while task.wait(0.5) do
+
         if not _G.stopAll then
             pcall(ProcessFlow)
         end
+
     end
+
 end)
 
--- ==================== 领域循环 ====================
-task.spawn(function()
-    while task.wait(2) do
-        if _G.stopAll then continue end
-        pcall(function()
-            local towersFolder = Workspace:FindFirstChild("Towers")
-            if not towersFolder then return end
+--========================================================--
+--                     领域循环
+--========================================================--
 
+task.spawn(function()
+
+    while task.wait(2) do
+
+        if _G.stopAll then
+            continue
+        end
+
+        pcall(function()
+
+            local towersFolder =
+                Workspace:FindFirstChild("Towers")
+
+            if not towersFolder then
+                return
+            end
+
+            -- King Domain
             for _, t in ipairs(towersFolder:GetChildren()) do
+
                 if t.Name:find(TOWER_NAMES.KING) then
+
                     pcall(function()
                         DomainActiveRemote:FireServer(t)
                     end)
+
                     break
                 end
             end
 
+            -- Gojo Domain
             for _, t in ipairs(towersFolder:GetChildren()) do
+
                 if t.Name:find(TOWER_NAMES.GOJO) then
+
                     pcall(function()
                         GojoDomain:FireServer(t)
                     end)
+
                     break
                 end
             end
+
         end)
     end
 end)
 
+--========================================================--
+--                     Wave 50 删除
+--========================================================--
+
 local waveTriggered = false
 
 task.spawn(function()
-    while task.wait(0.5) do
-        pcall(function()
-            local info = Workspace:FindFirstChild("Info")
-            if not info then return end
-            local wave = info:FindFirstChild("Wave")
-            if not wave then return end
 
-            if wave.Value >= 50 and not waveTriggered then
-                waveTriggered = true
-                _G.stopAll = true
-                print("[系统] Wave 达到 50,进入疯狂删除模式...")
+    while task.wait(0.5) do
+
+        pcall(function()
+
+            local info =
+                Workspace:FindFirstChild("Info")
+
+            if not info then
+                return
             end
 
+            local wave =
+                info:FindFirstChild("Wave")
+
+            if not wave then
+                return
+            end
+
+            -- Wave >= 50
+            if wave.Value >= 50 and not waveTriggered then
+
+                waveTriggered = true
+
+                _G.stopAll = true
+
+                print(
+                    "[系统] Wave 达到 50,进入疯狂删除模式..."
+                )
+            end
+
+            -- 疯狂出售
             if waveTriggered then
-                local towersFolder = Workspace:FindFirstChild("Towers")
+
+                local towersFolder =
+                    Workspace:FindFirstChild("Towers")
+
                 if towersFolder then
+
                     for _, t in ipairs(towersFolder:GetChildren()) do
+
                         pcall(function()
                             SellTower:InvokeServer(t)
                         end)
+
                         task.wait(0.01)
                     end
                 end
             end
+
         end)
     end
 end)
