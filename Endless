@@ -4,9 +4,25 @@
 -- 2x Miracle -> Lv4
 -- 完成后疯狂尝试放置其他所有塔
 --
+-- TOWERS:
+-- MiracleSorcerer
+-- HarvesterCurse
+-- TreeOfLife
+-- Kogane -> 绑定 KingOfCursesEvo
+-- KingOfCursesEvo
+-- KingOfCursesFrost
+-- StrongestSorcererEvo
+-- StrongestSorcerer
+-- FrostBlossom
+--
 -- FrostBlossom:
 -- 固定 UUID
 -- 固定位置
+--
+-- Kogane:
+-- 固定 UUID
+-- 固定位置
+-- 第三个参数绑定 KingOfCursesEvo
 --
 -- MAX PERFORMANCE:
 -- 所有 BasePart -> SmoothPlastic
@@ -14,6 +30,9 @@
 -- 关闭阴影
 -- 删除 Lighting 后处理
 -- 持续处理新生成对象
+--
+-- KING DOMAIN:
+-- 已完全关闭
 --========================================================--
 
 local environment = getgenv()
@@ -77,12 +96,6 @@ local AutoSkip =
 
 local GetAllData =
     Remotes:WaitForChild("GetAllData")
-
-local DomainActiveRemote =
-    Remotes
-        :WaitForChild("Towers")
-        :WaitForChild("KingOfCursesEvo")
-        :WaitForChild("DomainActive")
 
 local GojoDomain =
     Remotes:WaitForChild("GojoDomain")
@@ -227,7 +240,7 @@ local function OptimizeObject(obj)
 
         --================================================--
         -- FIRE
-        --================================================--
+        --==================================================
 
         if obj:IsA("Fire") then
 
@@ -427,7 +440,13 @@ local TOWER_NAMES = {
 
     STRONGEST = "StrongestSorcerer",
 
-    FROST = "FrostBlossom"
+    FROST = "FrostBlossom",
+
+    HARVESTER = "HarvesterCurse",
+
+    TREE = "TreeOfLife",
+
+    KOGANE = "Kogane"
 }
 
 --========================================================--
@@ -447,6 +466,26 @@ local FROST_BLOSSOM_CFRAME =
     CFrame.Angles(
         -3.1415927410125732,
         -8.742277657347586e-08,
+        -3.1415927410125732
+    )
+
+--========================================================--
+-- KOGANE
+--========================================================--
+
+local KOGANE_UUID =
+    "f4794151-3ac0-47a5-8dab-05829561c830"
+
+local KOGANE_CFRAME =
+    CFrame.new(
+        51.30082702636719,
+        35.8748779296875,
+        -124.45922088623047
+    )
+    *
+    CFrame.Angles(
+        -3.1415927410125732,
+        0,
         -3.1415927410125732
     )
 
@@ -604,6 +643,20 @@ local POSITIONS = {
                 -3.71,
                 14.77,
                 -106.33
+            ),
+
+        HARVESTER =
+            CFrame.new(
+                -42.24,
+                13,
+                -108.03
+            ),
+
+        TREE =
+            CFrame.new(
+                -31.248558044433594,
+                13.275632858276367,
+                -142.10992431640625
             )
     },
 
@@ -656,6 +709,20 @@ local POSITIONS = {
                 -14.10,
                 15.06,
                 -98.60
+            ),
+
+        HARVESTER =
+            CFrame.new(
+                -23.73,
+                15.21,
+                -83.58
+            ),
+
+        TREE =
+            CFrame.new(
+                31.04,
+                14.91,
+                -14.07
             )
     },
 
@@ -708,6 +775,20 @@ local POSITIONS = {
                 -40.19,
                 8.60,
                 -61.18
+            ),
+
+        HARVESTER =
+            CFrame.new(
+                -31.11,
+                8.60,
+                -34.43
+            ),
+
+        TREE =
+            CFrame.new(
+                -111.80,
+                8.60,
+                -63.30
             )
     },
 
@@ -760,6 +841,20 @@ local POSITIONS = {
                 51.32,
                 10.24,
                 -128.84
+            ),
+
+        HARVESTER =
+            CFrame.new(
+                57.55,
+                10.45,
+                -162.00
+            ),
+
+        TREE =
+            CFrame.new(
+                93.45,
+                10.21,
+                -138.19
             )
     },
 
@@ -812,6 +907,20 @@ local POSITIONS = {
                 -22.31,
                 53.88,
                 -102.14
+            ),
+
+        HARVESTER =
+            CFrame.new(
+                1.46,
+                53.80,
+                -89.49
+            ),
+
+        TREE =
+            CFrame.new(
+                -8.60,
+                59.32,
+                -152.34
             )
     },
 
@@ -864,6 +973,20 @@ local POSITIONS = {
                 -24.43,
                 25.59,
                 -111.47
+            ),
+
+        HARVESTER =
+            CFrame.new(
+                -41.10,
+                25.59,
+                -180.09
+            ),
+
+        TREE =
+            CFrame.new(
+                16.74,
+                29.04,
+                -154.48
             )
     },
 
@@ -912,6 +1035,20 @@ local POSITIONS = {
             ),
 
         FROST =
+            CFrame.new(
+                113,
+                38,
+                -131
+            ),
+
+        HARVESTER =
+            CFrame.new(
+                126,
+                38,
+                -133
+            ),
+
+        TREE =
             CFrame.new(
                 113,
                 38,
@@ -1096,6 +1233,24 @@ local function AllMiracleAtLeast(level)
 end
 
 --========================================================--
+-- FIND KING
+--========================================================--
+
+local function GetKingTower()
+
+    local kings =
+        GetTowersByName(
+            TOWER_NAMES.KING
+        )
+
+    if #kings == 0 then
+        return nil
+    end
+
+    return kings[1]
+end
+
+--========================================================--
 -- PLACE TOWER
 --========================================================--
 
@@ -1115,7 +1270,6 @@ local function PlaceTower(nameKey)
     --====================================================--
     -- FrostBlossom
     -- 固定 UUID
-    -- 不获取 UUID
     --====================================================--
 
     if nameKey == "FROST" then
@@ -1150,8 +1304,51 @@ local function PlaceTower(nameKey)
     end
 
     --====================================================--
-    -- 其他塔
-    -- 塔名 -> UUID
+    -- Kogane
+    -- 固定 UUID
+    -- 第三个参数绑定 KingOfCursesEvo
+    --====================================================--
+
+    if nameKey == "KOGANE" then
+
+        local king =
+            GetKingTower()
+
+        if not king then
+            return false
+        end
+
+        local args = {
+
+            [1] =
+                KOGANE_UUID,
+
+            [2] =
+                KOGANE_CFRAME,
+
+            [3] =
+                king
+
+        }
+
+        local ok, ret =
+            pcall(function()
+
+                return SpawnNewTower:InvokeServer(
+                    unpack(args)
+                )
+
+            end)
+
+        if not ok or not ret then
+            return false
+        end
+
+        return true
+    end
+
+    --====================================================--
+    -- 普通塔
     --====================================================--
 
     local posTable =
@@ -1397,6 +1594,24 @@ local function UpgradeLoop()
                     true
                 )
 
+                or tower.Name:find(
+                    TOWER_NAMES.HARVESTER,
+                    1,
+                    true
+                )
+
+                or tower.Name:find(
+                    TOWER_NAMES.TREE,
+                    1,
+                    true
+                )
+
+                or tower.Name:find(
+                    TOWER_NAMES.KOGANE,
+                    1,
+                    true
+                )
+
             if not (
                 _G.upgradeBlocked
                 and affected
@@ -1533,6 +1748,10 @@ end)
 
 local ALL_AFTER_MIRACLE = {
 
+    "HARVESTER",
+
+    "TREE",
+
     "CHEAP",
 
     "B85",
@@ -1543,7 +1762,9 @@ local ALL_AFTER_MIRACLE = {
 
     "STRONGEST",
 
-    "FROST"
+    "FROST",
+
+    "KOGANE"
 }
 
 local function SpamPlaceOthers()
@@ -1637,6 +1858,9 @@ end)
 --========================================================--
 -- DOMAIN
 --========================================================--
+-- King Domain 已完全关闭
+-- 这里只保留 Gojo Domain
+--========================================================--
 
 task.spawn(function()
 
@@ -1657,32 +1881,9 @@ task.spawn(function()
                 return
             end
 
-            -- King Domain
-
-            for _, t in ipairs(
-                towersFolder:GetChildren()
-            ) do
-
-                if t.Name:find(
-                    TOWER_NAMES.KING,
-                    1,
-                    true
-                ) then
-
-                    pcall(function()
-
-                        DomainActiveRemote:FireServer(
-                            t
-                        )
-
-                    end)
-
-                    break
-                end
-
-            end
-
+            --================================================--
             -- Gojo Domain
+            --================================================--
 
             for _, t in ipairs(
                 towersFolder:GetChildren()
@@ -1816,6 +2017,10 @@ print(
 
 print(
     "[SYSTEM] Tower Control Started"
+)
+
+print(
+    "[SYSTEM] King Domain DISABLED"
 )
 
 print(
