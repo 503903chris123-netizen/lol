@@ -3,14 +3,8 @@
 --        Advanced Black-Tech HUD Edition
 --        支持 Colony1~5 自动识别
 --        新塔自动化系统
---        新塔：
---          HarvesterCurse
---          MiracleSorcerer
---          KingOfCursesEvo
---          FrostBlossom
---          StrongestSorcererEvo
---        Gold > 2000 时 Strongest 最高优先级
---        UI 位于屏幕顶端
+--        TreeOfLife 替换 FrostBlossom
+--        所有塔按名称获取 UUID
 --========================================================--
 
 local Players = game:GetService("Players")
@@ -38,7 +32,6 @@ local StartTime = tick()
 local DebugMessages = {}
 local MAX_DEBUG = 7
 
--- 新塔状态
 local strongestPlacing = false
 local openingComplete = false
 
@@ -74,7 +67,7 @@ local function GetTeleportersRemote()
 end
 
 --========================================================--
--- TOWER UUID
+-- TOWER UUID - ALL TOWERS LOOKED UP BY NAME
 --========================================================--
 
 local uuidCache = {}
@@ -82,19 +75,24 @@ local uuidCache = {}
 local function GetUUIDByName(towerName)
     local remotes = GetRemotes()
     if not remotes then return nil end
+
     local remote = remotes:FindFirstChild("GetAllData")
-    if not remote then return nil end
+    if not remote or not remote:IsA("RemoteFunction") then
+        return nil
+    end
 
     local success, data = pcall(function()
         return remote:InvokeServer()
     end)
 
-    if not success or not data or not data.Towers then
+    if not success or type(data) ~= "table"
+        or type(data.Towers) ~= "table" then
         return nil
     end
 
     for uuid, info in pairs(data.Towers) do
-        if info and info.Name == towerName then
+        if type(info) == "table" and info.Name == towerName then
+            uuidCache[towerName] = uuid
             return uuid
         end
     end
@@ -102,10 +100,17 @@ local function GetUUIDByName(towerName)
     return nil
 end
 
-local function GetTowerUUID(name)
-    if uuidCache[name] then return uuidCache[name] end
-    local uuid = GetUUIDByName(name)
-    if uuid then uuidCache[name] = uuid end
+local function GetTowerUUID(towerName)
+    if uuidCache[towerName] then
+        return uuidCache[towerName]
+    end
+
+    local uuid = GetUUIDByName(towerName)
+
+    if uuid then
+        uuidCache[towerName] = uuid
+    end
+
     return uuid
 end
 
@@ -114,11 +119,41 @@ end
 --========================================================--
 
 local TOWER_CONFIGS = {
-    { key = "HARVESTER", displayName = "HarvesterCurse", folderName = "HarvesterCurse", max = 1, stage = 0 },
-    { key = "MIRACLE", displayName = "MiracleSorcerer", folderName = "MiracleSorcerer", max = 2, stage = 0 },
-    { key = "KING", displayName = "KingOfCursesEvo", folderName = "KingOfCursesEvo", max = 1, stage = 1 },
-    { key = "FROST", displayName = "FrostBlossom", folderName = "FrostBlossom", max = 1, stage = 1 },
-    { key = "STRONGEST", displayName = "StrongestSorcererEvo", folderName = "StrongestSorcererEvo", max = 1, stage = 1 }
+    {
+        key = "HARVESTER",
+        displayName = "HarvesterCurse",
+        folderName = "HarvesterCurse",
+        max = 1,
+        stage = 0
+    },
+    {
+        key = "MIRACLE",
+        displayName = "MiracleSorcerer",
+        folderName = "MiracleSorcerer",
+        max = 2,
+        stage = 0
+    },
+    {
+        key = "KING",
+        displayName = "KingOfCursesEvo",
+        folderName = "KingOfCursesEvo",
+        max = 1,
+        stage = 1
+    },
+    {
+        key = "TREE",
+        displayName = "TreeOfLife",
+        folderName = "TreeOfLife",
+        max = 1,
+        stage = 1
+    },
+    {
+        key = "STRONGEST",
+        displayName = "StrongestSorcererEvo",
+        folderName = "StrongestSorcererEvo",
+        max = 1,
+        stage = 1
+    }
 }
 
 --========================================================--
@@ -132,6 +167,7 @@ end
 local function GetCurrentColony()
     local map = GetMap()
     if not map then return nil end
+
     if map:FindFirstChild("Colony1") then
         return "Colony1"
     elseif map:FindFirstChild("Colony2") then
@@ -143,14 +179,19 @@ local function GetCurrentColony()
     elseif map:FindFirstChild("Colony5") then
         return "Colony5"
     end
+
     return nil
 end
 
 local function IsInGame()
     local colony = GetCurrentColony()
     if colony then return true end
+
     local towers = Workspace:FindFirstChild("Towers")
-    if towers and #towers:GetChildren() > 0 then return true end
+    if towers and #towers:GetChildren() > 0 then
+        return true
+    end
+
     return false
 end
 
@@ -161,22 +202,27 @@ end
 local function GetTeleporters()
     local folder = Workspace:FindFirstChild("CullingGamesTeleporters")
     if not folder then return {} end
+
     local result = {}
+
     for _, child in ipairs(folder:GetChildren()) do
         if child:IsA("Model") then
             table.insert(result, child)
         end
     end
+
     table.sort(result, function(a, b)
         local aNum = tonumber(a.Name:match("%d+")) or 0
         local bNum = tonumber(b.Name:match("%d+")) or 0
         return aNum < bNum
     end)
+
     return result
 end
 
 local function IsTeleporterEmpty(tp)
     if not tp then return false end
+
     local config = tp:FindFirstChild("Config")
     if config then
         local playerCount = config:FindFirstChild("PlayerCount")
@@ -184,50 +230,67 @@ local function IsTeleporterEmpty(tp)
             return playerCount.Value == 0
         end
     end
+
     return true
 end
 
 local function GetTeleporterPlayerCount(tp)
     if not tp then return 0, 4 end
+
     local billboard = tp:FindFirstChild("Billboard")
     if not billboard then return 0, 4 end
+
     local gui = billboard:FindFirstChild("BillboardGui")
     if not gui then return 0, 4 end
+
     local label = gui:FindFirstChild("PlayerCount")
-    if not label or not label:IsA("TextLabel") then return 0, 4 end
+    if not label or not label:IsA("TextLabel") then
+        return 0, 4
+    end
+
     local text = label.Text
     local count = tonumber(text:match("^(%d+)"))
     local max = tonumber(text:match("/(%d+)"))
+
     return count or 0, max or 4
 end
 
 local function GetNextEmptyTeleporter()
     local teleporters = GetTeleporters()
     if #teleporters == 0 then return nil end
+
     for i = 1, #teleporters do
         local index = ((lastTeleporterIndex + i - 1) % #teleporters) + 1
         local tp = teleporters[index]
+
         if IsTeleporterEmpty(tp) then
             lastTeleporterIndex = index
             return tp
         end
     end
+
     return nil
 end
 
 local function GoToTeleporter()
     local character = LocalPlayer.Character
     if not character then return false end
+
     local root = character:FindFirstChild("HumanoidRootPart")
     if not root then return false end
+
     local tp = GetNextEmptyTeleporter()
     if not tp then return false end
+
     local teleports = tp:FindFirstChild("Teleports")
     if not teleports then return false end
+
     local entrance = teleports:FindFirstChild("Entrance")
     if not entrance then return false end
+
     root.CFrame = CFrame.new(entrance.Position + Vector3.new(0, 3, 0))
     currentTeleporter = tp
+
     return true
 end
 
@@ -240,6 +303,7 @@ local connectedTeleportersRemote = nil
 local function ConnectTeleportersRemote(remote)
     if not remote then return end
     if connectedTeleportersRemote == remote then return end
+
     connectedTeleportersRemote = remote
     AddDebug("Teleporters Remote connected")
 
@@ -252,10 +316,13 @@ local function ConnectTeleportersRemote(remote)
     if host and host:IsA("RemoteEvent") then
         host.OnClientEvent:Connect(function(tp)
             if not running then return end
+
             currentTeleporter = tp
             task.wait(0.3)
+
             local r = GetTeleportersRemote()
             if not r then return end
+
             local choose = r:FindFirstChild("ChooseStage")
             if choose and choose:IsA("RemoteEvent") then
                 pcall(function()
@@ -268,15 +335,19 @@ local function ConnectTeleportersRemote(remote)
     if startCountdown and startCountdown:IsA("RemoteEvent") then
         startCountdown.OnClientEvent:Connect(function()
             if not running then return end
+
             if currentTeleporter then
                 task.wait(0.2)
+
                 local r = GetTeleportersRemote()
                 if not r then return end
+
                 local start = r:FindFirstChild("Start")
                 if start and start:IsA("RemoteEvent") then
                     pcall(function()
                         start:FireServer(currentTeleporter)
                     end)
+
                     startSent = true
                 end
             end
@@ -286,6 +357,7 @@ local function ConnectTeleportersRemote(remote)
     if leave and leave:IsA("RemoteEvent") then
         leave.OnClientEvent:Connect(function()
             if not running then return end
+
             currentTeleporter = nil
             startSent = false
         end)
@@ -295,7 +367,10 @@ end
 task.spawn(function()
     while running do
         local remote = GetTeleportersRemote()
-        if remote then ConnectTeleportersRemote(remote) end
+        if remote then
+            ConnectTeleportersRemote(remote)
+        end
+
         task.wait(0.5)
     end
 end)
@@ -310,19 +385,25 @@ task.spawn(function()
             if not IsInGame() then
                 inLobby = true
                 GoToTeleporter()
+
                 local remote = GetTeleportersRemote()
+
                 if remote and currentTeleporter then
                     local tryStart = remote:FindFirstChild("TryToStart")
+
                     if tryStart and tryStart:IsA("RemoteEvent") then
                         pcall(function()
                             tryStart:FireServer(currentTeleporter)
                         end)
                     end
+
                     local start = remote:FindFirstChild("Start")
+
                     if start and start:IsA("RemoteEvent") then
                         pcall(function()
                             start:FireServer(currentTeleporter)
                         end)
+
                         startSent = true
                     end
                 end
@@ -330,6 +411,7 @@ task.spawn(function()
                 inLobby = false
             end
         end)
+
         task.wait(0.1)
     end
 end)
@@ -342,10 +424,13 @@ task.spawn(function()
     while running do
         pcall(function()
             local remotes = GetRemotes()
+
             if remotes then
                 local culling = remotes:FindFirstChild("CullingGames")
+
                 if culling then
                     local modifiers = culling:FindFirstChild("ChooseModifiers")
+
                     if modifiers then
                         pcall(function()
                             modifiers:FireServer(true)
@@ -354,6 +439,7 @@ task.spawn(function()
                 end
             end
         end)
+
         task.wait(1)
     end
 end)
@@ -369,12 +455,15 @@ end
 local function GetTowersByName(name)
     local folder = GetTowersFolder()
     if not folder then return {} end
+
     local result = {}
+
     for _, tower in ipairs(folder:GetChildren()) do
         if tower.Name:sub(1, #name) == name then
             table.insert(result, tower)
         end
     end
+
     return result
 end
 
@@ -390,9 +479,11 @@ end
 local function GetTowerLevels(name)
     local towers = GetTowersByName(name)
     local levels = {}
+
     for _, t in ipairs(towers) do
         table.insert(levels, GetTowerLevel(t))
     end
+
     table.sort(levels)
     return levels
 end
@@ -403,6 +494,7 @@ end
 
 local function GetPlacementPosition()
     local colony = GetCurrentColony()
+
     if colony == "Colony1" then
         return CFrame.new(12.42, 48.59, -119.27)
     elseif colony == "Colony2" then
@@ -429,6 +521,7 @@ local function WaitForTower(towerName, oldCount, timeout)
         if GetTowerCount(towerName) > oldCount then
             return true
         end
+
         task.wait(0.05)
     end
 
@@ -453,80 +546,45 @@ local function PlaceTower(key)
         return false
     end
 
-    local currentCount =
-        GetTowerCount(config.folderName)
+    local currentCount = GetTowerCount(config.folderName)
 
     if currentCount >= config.max then
         return true
     end
 
-    local uuid =
-        GetTowerUUID(config.folderName)
+    -- 根据塔名查找 UUID
+    local uuid = GetTowerUUID(config.displayName)
 
     if not uuid then
-        AddDebug(
-            "无法获取 " ..
-            config.folderName ..
-            " UUID"
-        )
+        AddDebug("无法获取 " .. config.displayName .. " UUID")
         return false
     end
 
-    local functions =
-        ReplicatedStorage:FindFirstChild("Functions")
+    local functions = ReplicatedStorage:FindFirstChild("Functions")
+    if not functions then return false end
 
-    if not functions then
+    local spawnTower = functions:FindFirstChild("SpawnNewTower")
+    if not spawnTower or not spawnTower:IsA("RemoteFunction") then
         return false
     end
 
-    local spawnTower =
-        functions:FindFirstChild("SpawnNewTower")
+    local position = GetPlacementPosition()
 
-    if not spawnTower then
-        return false
-    end
-
-    local position =
-        GetPlacementPosition()
-
-    local success, result =
-        pcall(function()
-            return spawnTower:InvokeServer(
-                uuid,
-                position
-            )
-        end)
+    local success, result = pcall(function()
+        return spawnTower:InvokeServer(uuid, position)
+    end)
 
     if not success then
-        AddDebug(
-            config.folderName ..
-            " Remote Error"
-        )
+        AddDebug(config.displayName .. " Remote Error")
         return false
     end
 
-    -- 不相信 Remote 返回值
-    -- 必须检查 Workspace.Towers
-
-    if WaitForTower(
-        config.folderName,
-        currentCount,
-        2
-    ) then
-
-        AddDebug(
-            config.folderName ..
-            " ACTUALLY PLACED"
-        )
-
+    if WaitForTower(config.folderName, currentCount, 2) then
+        AddDebug(config.displayName .. " ACTUALLY PLACED")
         return true
     end
 
-    AddDebug(
-        config.folderName ..
-        " 放置后未检测到实际塔"
-    )
-
+    AddDebug(config.displayName .. " 放置后未检测到实际塔")
     return false
 end
 
@@ -536,70 +594,39 @@ end
 --========================================================--
 
 local function TryStrongestImmediate()
-
     if strongestPlacing then
         return
     end
 
-    -- 已经实际存在
-    if GetTowerCount(
-        "StrongestSorcererEvo"
-    ) >= 1 then
+    if GetTowerCount("StrongestSorcererEvo") >= 1 then
         return
     end
 
-    local Gold =
-        LocalPlayer:FindFirstChild("Gold")
+    local Gold = LocalPlayer:FindFirstChild("Gold")
+    if not Gold then return end
 
-    if not Gold then
-        return
-    end
-
-    local gold =
-        tonumber(Gold.Value) or 0
-
-    if gold <= 2000 then
-        return
-    end
+    local gold = tonumber(Gold.Value) or 0
+    if gold <= 2000 then return end
 
     strongestPlacing = true
 
-    AddDebug(
-        "GOLD > 2000 !!!"
-    )
+    AddDebug("GOLD > 2000 !!!")
+    AddDebug("STRONGEST IMMEDIATE")
 
-    AddDebug(
-        "STRONGEST IMMEDIATE"
-    )
-
-    -- 在实际检测到 Strongest 前持续尝试
     while running do
-
-        if GetTowerCount(
-            "StrongestSorcererEvo"
-        ) >= 1 then
-
-            AddDebug(
-                "Strongest confirmed in Workspace.Towers"
-            )
-
+        if GetTowerCount("StrongestSorcererEvo") >= 1 then
+            AddDebug("Strongest confirmed in Workspace.Towers")
             break
         end
 
-        local currentGold =
-            tonumber(Gold.Value) or 0
-
+        local currentGold = tonumber(Gold.Value) or 0
         if currentGold <= 2000 then
             break
         end
 
-        PlaceTower(
-            "STRONGEST"
-        )
+        PlaceTower("STRONGEST")
 
-        if GetTowerCount(
-            "StrongestSorcererEvo"
-        ) >= 1 then
+        if GetTowerCount("StrongestSorcererEvo") >= 1 then
             break
         end
 
@@ -613,23 +640,15 @@ end
 -- GOLD MONITOR
 --========================================================--
 
-local Gold =
-    LocalPlayer:WaitForChild("Gold")
+local Gold = LocalPlayer:WaitForChild("Gold")
 
 Gold.Changed:Connect(function(value)
+    local gold = tonumber(value) or 0
 
-    local gold =
-        tonumber(value) or 0
-
-    if gold > 2000 and
-       GetTowerCount(
-           "StrongestSorcererEvo"
-       ) < 1 then
-
+    if gold > 2000 and GetTowerCount("StrongestSorcererEvo") < 1 then
         task.spawn(function()
             TryStrongestImmediate()
         end)
-
     end
 end)
 
@@ -638,28 +657,17 @@ end)
 --========================================================--
 
 task.spawn(function()
-
     while running do
-
         pcall(function()
+            local gold = tonumber(Gold.Value) or 0
 
-            local gold =
-                tonumber(Gold.Value) or 0
-
-            if gold > 2000 and
-               GetTowerCount(
-                   "StrongestSorcererEvo"
-               ) < 1 then
-
+            if gold > 2000 and GetTowerCount("StrongestSorcererEvo") < 1 then
                 TryStrongestImmediate()
-
             end
-
         end)
 
         task.wait(0.03)
     end
-
 end)
 
 --========================================================--
@@ -667,178 +675,82 @@ end)
 --========================================================--
 
 task.spawn(function()
-
     while running do
-
         task.wait(0.1)
 
         pcall(function()
-
-            local colony =
-                GetCurrentColony()
+            local colony = GetCurrentColony()
 
             if not colony then
-
                 currentStage = 0
                 upgradeEnabled = false
                 openingComplete = false
-
                 return
             end
 
-            local harvesterCount =
-                GetTowerCount(
-                    "HarvesterCurse"
-                )
-
-            local miracleCount =
-                GetTowerCount(
-                    "MiracleSorcerer"
-                )
-
-            local kingCount =
-                GetTowerCount(
-                    "KingOfCursesEvo"
-                )
-
-            local frostCount =
-                GetTowerCount(
-                    "FrostBlossom"
-                )
-
-            local strongestCount =
-                GetTowerCount(
-                    "StrongestSorcererEvo"
-                )
-
-            --================================================--
-            -- GOLD > 2000 永远先检查
-            --================================================--
+            local harvesterCount = GetTowerCount("HarvesterCurse")
+            local miracleCount = GetTowerCount("MiracleSorcerer")
+            local kingCount = GetTowerCount("KingOfCursesEvo")
+            local treeCount = GetTowerCount("TreeOfLife")
+            local strongestCount = GetTowerCount("StrongestSorcererEvo")
 
             if strongestCount < 1 then
-
-                local gold =
-                    tonumber(Gold.Value) or 0
+                local gold = tonumber(Gold.Value) or 0
 
                 if gold > 2000 then
                     TryStrongestImmediate()
                 end
-
             end
 
-            --================================================--
-            -- STAGE 0
-            -- Harvester x1
-            --================================================--
-
+            -- STAGE 0: Harvester x1
             if harvesterCount < 1 then
-
                 currentStage = 0
+                PlaceTower("HARVESTER")
 
-                PlaceTower(
-                    "HARVESTER"
-                )
-
-            --================================================--
-            -- STAGE 0
-            -- Miracle x2
-            --================================================--
-
+            -- STAGE 0: Miracle x2
             elseif miracleCount < 2 then
-
                 currentStage = 0
-
-                PlaceTower(
-                    "MIRACLE"
-                )
+                PlaceTower("MIRACLE")
 
             else
-
                 openingComplete = true
                 upgradeEnabled = true
-
-                --================================================--
-                -- OPENING 完成
-                -- 后面不再使用旧阶段限制
-                --================================================--
-
                 currentStage = 1
 
-                --================================================--
                 -- Strongest
-                --================================================--
-
                 if strongestCount < 1 then
-
-                    local gold =
-                        tonumber(Gold.Value) or 0
+                    local gold = tonumber(Gold.Value) or 0
 
                     if gold > 2000 then
                         TryStrongestImmediate()
                     end
-
                 end
 
-                --================================================--
-                -- Frost
-                --================================================--
-
-                if GetTowerCount(
-                    "FrostBlossom"
-                ) < 1 then
-
-                    PlaceTower(
-                        "FROST"
-                    )
-
+                -- TreeOfLife
+                if treeCount < 1 then
+                    PlaceTower("TREE")
                 end
 
-                --================================================--
                 -- King
-                --================================================--
-
-                if GetTowerCount(
-                    "KingOfCursesEvo"
-                ) < 1 then
-
-                    PlaceTower(
-                        "KING"
-                    )
-
+                if kingCount < 1 then
+                    PlaceTower("KING")
                 end
-
             end
 
-            --================================================--
             -- 最后再次抢 Strongest
-            -- 防止 King/Frost 放置期间 Gold 突破 2000
-            --================================================--
-
-            if GetTowerCount(
-                "StrongestSorcererEvo"
-            ) < 1 then
-
-                local gold =
-                    tonumber(Gold.Value) or 0
+            if GetTowerCount("StrongestSorcererEvo") < 1 then
+                local gold = tonumber(Gold.Value) or 0
 
                 if gold > 2000 then
                     TryStrongestImmediate()
                 end
-
             end
-
-            --================================================--
-            -- UPGRADE
-            --================================================--
 
             if upgradeEnabled then
                 UpgradeLoop()
             end
-
         end)
-
     end
-
 end)
 
 --========================================================--
@@ -846,77 +758,38 @@ end)
 --========================================================--
 
 function UpgradeLoop()
-
     if not upgradeEnabled then
         return
     end
 
-    local towers =
-        GetTowersFolder()
+    local towers = GetTowersFolder()
+    if not towers then return end
 
-    if not towers then
-        return
-    end
+    local functions = ReplicatedStorage:FindFirstChild("Functions")
+    if not functions then return end
 
-    local functions =
-        ReplicatedStorage:FindFirstChild(
-            "Functions"
-        )
+    local upgrade = functions:FindFirstChild("UpgradeTower")
+    if not upgrade then return end
 
-    if not functions then
-        return
-    end
-
-    local upgrade =
-        functions:FindFirstChild(
-            "UpgradeTower"
-        )
-
-    if not upgrade then
-        return
-    end
-
-    for _, tower in ipairs(
-        towers:GetChildren()
-    ) do
-
+    for _, tower in ipairs(towers:GetChildren()) do
         if not running then
             break
         end
 
-        -- 只升级新塔
-        local valid =
-            tower.Name:sub(
-                1,
-                #"HarvesterCurse"
-            ) == "HarvesterCurse"
+        -- 只升级配置中的塔
+        local valid = false
 
-            or tower.Name:sub(
-                1,
-                #"MiracleSorcerer"
-            ) == "MiracleSorcerer"
-
-            or tower.Name:sub(
-                1,
-                #"KingOfCursesEvo"
-            ) == "KingOfCursesEvo"
-
-            or tower.Name:sub(
-                1,
-                #"FrostBlossom"
-            ) == "FrostBlossom"
-
-            or tower.Name:sub(
-                1,
-                #"StrongestSorcererEvo"
-            ) == "StrongestSorcererEvo"
+        for _, config in ipairs(TOWER_CONFIGS) do
+            if tower.Name:sub(1, #config.folderName) == config.folderName then
+                valid = true
+                break
+            end
+        end
 
         if valid then
-
             pcall(function()
                 upgrade:InvokeServer(tower)
             end)
-
         end
 
         task.wait(0.05)
@@ -1181,7 +1054,7 @@ rightPanel.Parent = main
 SectionLabel(rightPanel, "TOWER MATRIX", 0)
 
 --========================================================--
--- 新塔 UI
+-- TOWER UI - TREE OF LIFE
 --========================================================--
 
 local towerCards = {}
@@ -1190,7 +1063,7 @@ local TowerInfo = {
     { name = "HarvesterCurse", short = "HARVESTER", color = CYAN, max = 1 },
     { name = "MiracleSorcerer", short = "MIRACLE", color = YELLOW, max = 2 },
     { name = "KingOfCursesEvo", short = "KING", color = RED, max = 1 },
-    { name = "FrostBlossom", short = "FROST", color = GREEN, max = 1 },
+    { name = "TreeOfLife", short = "TREE OF LIFE", color = GREEN, max = 1 },
     { name = "StrongestSorcererEvo", short = "STRONGEST", color = PURPLE, max = 1 }
 }
 
@@ -1300,8 +1173,7 @@ local function CreateTowerCard(info, index)
 end
 
 for i, info in ipairs(TowerInfo) do
-    towerCards[info.name] =
-        CreateTowerCard(info, i)
+    towerCards[info.name] = CreateTowerCard(info, i)
 end
 
 local console = Instance.new("Frame")
@@ -1346,61 +1218,45 @@ debugLabel.Parent = console
 --========================================================--
 
 local function UpdateStage()
-
     if not IsInGame() then
-
         stageBig.Text = "LOBBY"
         stageDesc.Text = "SEARCHING FOR TELEPORTER..."
         progress.Size = UDim2.new(0.05, 0, 1, 0)
-
         return
     end
 
-    local colony =
-        GetCurrentColony()
+    local colony = GetCurrentColony()
 
     if not colony then
-
         stageBig.Text = "LOADING"
         stageDesc.Text = "WAITING FOR MAP..."
         progress.Size = UDim2.new(0.15, 0, 1, 0)
-
         return
     end
 
-    local harvester =
-        GetTowerCount("HarvesterCurse")
-
-    local miracle =
-        GetTowerCount("MiracleSorcerer")
-
-    local strongest =
-        GetTowerCount("StrongestSorcererEvo")
+    local harvester = GetTowerCount("HarvesterCurse")
+    local miracle = GetTowerCount("MiracleSorcerer")
+    local strongest = GetTowerCount("StrongestSorcererEvo")
 
     if harvester < 1 then
-
         stageBig.Text = "STAGE 0"
         stageDesc.Text = "DEPLOY HARVESTER CURSE"
         progress.Size = UDim2.new(0.15, 0, 1, 0)
 
     elseif miracle < 2 then
-
         stageBig.Text = "STAGE 0"
         stageDesc.Text = "DEPLOY MIRACLE SORCERER x2"
         progress.Size = UDim2.new(0.35, 0, 1, 0)
 
     elseif strongest < 1 then
-
         stageBig.Text = "STAGE 1"
         stageDesc.Text = "WAITING FOR GOLD > 2000 / STRONGEST"
         progress.Size = UDim2.new(0.65, 0, 1, 0)
 
     else
-
         stageBig.Text = "STAGE 1"
         stageDesc.Text = "FULL AUTOMATION ACTIVE"
         progress.Size = UDim2.new(1, 0, 1, 0)
-
     end
 end
 
@@ -1409,198 +1265,103 @@ end
 --========================================================--
 
 local function UpdateUI()
-
-    local inGame =
-        IsInGame()
-
-    local colony =
-        GetCurrentColony()
+    local inGame = IsInGame()
+    local colony = GetCurrentColony()
 
     if colony then
-
         statusDot.BackgroundColor3 = GREEN
         statusText.Text = "SYSTEM ONLINE"
         statusText.TextColor3 = GREEN
 
     elseif inGame then
-
         statusDot.BackgroundColor3 = YELLOW
         statusText.Text = "LOADING WORLD"
         statusText.TextColor3 = YELLOW
 
     else
-
         statusDot.BackgroundColor3 = CYAN
         statusText.Text = "STANDBY"
         statusText.TextColor3 = CYAN
-
     end
 
-    mapValue.Text =
-        colony or "WAITING"
+    mapValue.Text = colony or "WAITING"
+    mapValue.TextColor3 = colony and GREEN or YELLOW
 
-    mapValue.TextColor3 =
-        colony and GREEN or YELLOW
-
-    local character =
-        LocalPlayer.Character
+    local character = LocalPlayer.Character
 
     playerValue.Text =
-        character and
-        character:FindFirstChild(
-            "HumanoidRootPart"
-        )
+        character
+        and character:FindFirstChild("HumanoidRootPart")
         and "READY"
         or "LOADING"
 
-    playerValue.TextColor3 =
-        character and GREEN or YELLOW
+    playerValue.TextColor3 = character and GREEN or YELLOW
 
-    remoteValue.Text =
-        GetTeleportersRemote()
-        and "CONNECTED"
-        or "WAITING"
+    remoteValue.Text = GetTeleportersRemote() and "CONNECTED" or "WAITING"
+    remoteValue.TextColor3 = GetTeleportersRemote() and GREEN or YELLOW
 
-    remoteValue.TextColor3 =
-        GetTeleportersRemote()
-        and GREEN
-        or YELLOW
+    timerValue.Text = string.format(
+        "%02d:%02d",
+        math.floor((tick() - StartTime) / 60),
+        math.floor((tick() - StartTime) % 60)
+    )
 
-    timerValue.Text =
-        string.format(
-            "%02d:%02d",
-            math.floor(
-                (tick() - StartTime) / 60
-            ),
-            math.floor(
-                (tick() - StartTime) % 60
-            )
-        )
+    local tp = currentTeleporter
+    teleporterValue.Text = tp and tp.Name or "--"
 
-    local tp =
-        currentTeleporter
-
-    teleporterValue.Text =
-        tp and tp.Name or "--"
-
-    for name, card in pairs(
-        towerCards
-    ) do
-
-        card.card.Visible =
-            colony ~= nil
+    for name, card in pairs(towerCards) do
+        card.card.Visible = colony ~= nil
 
         if colony then
+            local count = GetTowerCount(name)
+            local max = card.info.max
+            local levels = GetTowerLevels(name)
 
-            local count =
-                GetTowerCount(name)
-
-            local max =
-                card.info.max
-
-            local levels =
-                GetTowerLevels(name)
-
-            card.count.Text =
-                tostring(count)
-                .. " / "
-                .. tostring(max)
+            card.count.Text = tostring(count) .. " / " .. tostring(max)
 
             if #levels > 0 then
-
-                card.level.Text =
-                    "LEVEL  "
-                    .. table.concat(
-                        levels,
-                        "  /  "
-                    )
-
+                card.level.Text = "LEVEL  " .. table.concat(levels, "  /  ")
             else
-
-                card.level.Text =
-                    "LEVEL  --"
-
+                card.level.Text = "LEVEL  --"
             end
 
-            local ratio =
-                math.clamp(
-                    count / max,
-                    0,
-                    1
-                )
+            local ratio = math.clamp(count / max, 0, 1)
 
             TweenService:Create(
                 card.bar,
-                TweenInfo.new(
-                    0.25,
-                    Enum.EasingStyle.Quad,
-                    Enum.EasingDirection.Out
-                ),
+                TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
                 {
-                    Size =
-                        UDim2.new(
-                            ratio,
-                            0,
-                            1,
-                            0
-                        )
+                    Size = UDim2.new(ratio, 0, 1, 0)
                 }
             ):Play()
 
             if count >= max then
-
-                card.state.Text =
-                    "ONLINE"
-
-                card.state.TextColor3 =
-                    GREEN
+                card.state.Text = "ONLINE"
+                card.state.TextColor3 = GREEN
 
             elseif count > 0 then
-
-                card.state.Text =
-                    "ACTIVE"
-
-                card.state.TextColor3 =
-                    CYAN
+                card.state.Text = "ACTIVE"
+                card.state.TextColor3 = CYAN
 
             else
-
-                card.state.Text =
-                    "WAITING"
-
-                card.state.TextColor3 =
-                    YELLOW
-
+                card.state.Text = "WAITING"
+                card.state.TextColor3 = YELLOW
             end
         end
     end
 
     local lines = {}
 
-    for i = 1,
-        math.min(
-            #DebugMessages,
-            MAX_DEBUG
-        ) do
-
-        local d =
-            DebugMessages[i]
+    for i = 1, math.min(#DebugMessages, MAX_DEBUG) do
+        local d = DebugMessages[i]
 
         table.insert(
             lines,
-            "[" ..
-            d.time ..
-            "] " ..
-            d.text
+            "[" .. d.time .. "] " .. d.text
         )
-
     end
 
-    debugLabel.Text =
-        table.concat(
-            lines,
-            "\n"
-        )
+    debugLabel.Text = table.concat(lines, "\n")
 
     UpdateStage()
 end
@@ -1614,45 +1375,29 @@ local dragStart
 local startPosition
 
 header.InputBegan:Connect(function(input)
-
-    if input.UserInputType ==
-        Enum.UserInputType.MouseButton1 then
-
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
         dragging = true
         dragStart = input.Position
         startPosition = main.Position
-
     end
 end)
 
 header.InputEnded:Connect(function(input)
-
-    if input.UserInputType ==
-        Enum.UserInputType.MouseButton1 then
-
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
         dragging = false
-
     end
 end)
 
 UserInputService.InputChanged:Connect(function(input)
+    if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+        local delta = input.Position - dragStart
 
-    if dragging and
-        input.UserInputType ==
-        Enum.UserInputType.MouseMovement then
-
-        local delta =
-            input.Position -
-            dragStart
-
-        main.Position =
-            UDim2.new(
-                startPosition.X.Scale,
-                startPosition.X.Offset + delta.X,
-                startPosition.Y.Scale,
-                startPosition.Y.Offset + delta.Y
-            )
-
+        main.Position = UDim2.new(
+            startPosition.X.Scale,
+            startPosition.X.Offset + delta.X,
+            startPosition.Y.Scale,
+            startPosition.Y.Offset + delta.Y
+        )
     end
 end)
 
@@ -1689,21 +1434,14 @@ toggleStroke.Transparency = 0.2
 local visible = true
 
 toggle.MouseButton1Click:Connect(function()
-
-    visible =
-        not visible
-
-    main.Visible =
-        visible
+    visible = not visible
+    main.Visible = visible
 
     if visible then
-        toggle.TextColor3 =
-            CYAN
+        toggle.TextColor3 = CYAN
     else
-        toggle.TextColor3 =
-            PURPLE
+        toggle.TextColor3 = PURPLE
     end
-
 end)
 
 --========================================================--
@@ -1711,17 +1449,13 @@ end)
 --========================================================--
 
 task.spawn(function()
-
     while running do
-
         task.wait(0.5)
 
         pcall(function()
             UpdateUI()
         end)
-
     end
-
 end)
 
 --========================================================--
@@ -1729,106 +1463,41 @@ end)
 --========================================================--
 
 Workspace.ChildAdded:Connect(function(child)
-
-    if not running then
-        return
-    end
+    if not running then return end
 
     if child.Name == "Map" then
+        AddDebug("Map container detected")
 
-        AddDebug(
-            "Map container detected"
-        )
-
-    elseif child.Name ==
-        "CullingGamesTeleporters" then
-
-        AddDebug(
-            "Teleporters detected"
-        )
+    elseif child.Name == "CullingGamesTeleporters" then
+        AddDebug("Teleporters detected")
 
     elseif child.Name == "Towers" then
-
-        AddDebug(
-            "Tower container detected"
-        )
-
+        AddDebug("Tower container detected")
     end
-
 end)
 
 LocalPlayer.CharacterAdded:Connect(function()
-
-    AddDebug(
-        "Character respawn detected"
-    )
-
+    AddDebug("Character respawn detected")
 end)
 
 --========================================================--
 -- INITIAL DEBUG
 --========================================================--
 
-AddDebug(
-    "NEXUS automation initialized"
-)
+AddDebug("NEXUS automation initialized")
+AddDebug("Waiting for game objects...")
+AddDebug("HarvesterCurse x1 + MiracleSorcerer x2")
+AddDebug("Gold > 2000 = STRONGEST PRIORITY")
+AddDebug("King + TreeOfLife automatic deployment")
+AddDebug("Strongest verified through Workspace.Towers")
+AddDebug("All tower UUIDs retrieved by tower name")
 
-AddDebug(
-    "Waiting for game objects..."
-)
-
-AddDebug(
-    "HarvesterCurse x1 + MiracleSorcerer x2"
-)
-
-AddDebug(
-    "Gold > 2000 = STRONGEST PRIORITY"
-)
-
-AddDebug(
-    "King + Frost automatic deployment"
-)
-
-AddDebug(
-    "Strongest verified through Workspace.Towers"
-)
-
-AddDebug(
-    "New tower automation active"
-)
-
-print(
-    "=============================================="
-)
-
-print(
-    " NEXUS // CULLING AUTOMATION v3.6"
-)
-
-print(
-    " Advanced Black-Tech HUD"
-)
-
-print(
-    " UI initialized"
-)
-
-print(
-    " Remote loading is non-blocking"
-)
-
-print(
-    " Colony1~5 auto-detected"
-)
-
-print(
-    " New Towers: Harvester / Miracle / King / Frost / Strongest"
-)
-
-print(
-    " Gold > 2000 -> Strongest Priority"
-)
-
-print(
-    "=============================================="
-)
+print("==============================================")
+print(" NEXUS // CULLING AUTOMATION v3.6")
+print(" Advanced Black-Tech HUD")
+print(" UI initialized")
+print(" Remote loading is non-blocking")
+print(" Colony1~5 auto-detected")
+print(" New Towers: Harvester / Miracle / King / TreeOfLife / Strongest")
+print(" Gold > 2000 -> Strongest Priority")
+print("==============================================")
