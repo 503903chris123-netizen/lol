@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LOADSTRING // GENERATOR</title>
+<style>
+:root {
+  --bg: #080a0f;
+  --panel: #10141d;
+  --line: #252e3c;
+  --green: #a3ff12;
+  --text: #edf2f7;
+  --muted: #8995a6;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: radial-gradient(ellipse at top, #18251c 0%, var(--bg) 48%);
+  color: var(--text);
+  font-family: Consolas, "Courier New", monospace;
+  padding: 24px 16px;
+}
+main { max-width: 760px; margin: 45px auto; }
+.top {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 32px;
+}
+.logo {
+  width: 44px; height: 44px;
+  display: grid; place-items: center;
+  border: 1px solid var(--green);
+  color: var(--green);
+  font-size: 24px;
+  box-shadow: 0 0 18px #a3ff1220;
+}
+h1 { font-size: clamp(21px, 5vw, 32px); margin: 0; }
+h1 span { color: var(--green); }
+.subtitle { color: var(--muted); font-size: 12px; margin-top: 7px; }
+.panel {
+  background: #10141dee;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 24px;
+  margin-bottom: 16px;
+}
+.label {
+  display: block;
+  font-size: 12px;
+  color: var(--green);
+  margin-bottom: 12px;
+  letter-spacing: 1px;
+}
+input, textarea {
+  width: 100%;
+  border: 1px solid #303a49;
+  border-radius: 7px;
+  background: #090c12;
+  color: white;
+  padding: 14px;
+  outline: none;
+  font: 13px/1.7 Consolas, monospace;
+}
+input:focus, textarea:focus {
+  border-color: var(--green);
+  box-shadow: 0 0 0 2px #a3ff1215;
+}
+textarea { resize: vertical; min-height: 130px; }
+.hint { font-size: 11px; color: var(--muted); margin-top: 10px; line-height: 1.7; }
+.status { color: var(--muted); font-size: 12px; margin-top: 12px; }
+.status.ok { color: var(--green); }
+.output-head {
+  display: flex; justify-content: space-between;
+  align-items: center; gap: 10px; margin-bottom: 12px;
+}
+.badge {
+  font-size: 10px; color: var(--green);
+  border: 1px solid #a3ff1245; padding: 5px 8px; border-radius: 4px;
+}
+.buttons { display: flex; gap: 10px; margin-top: 14px; }
+button {
+  border: 1px solid var(--green);
+  border-radius: 6px;
+  background: var(--green);
+  color: #0a0d08;
+  padding: 12px 16px;
+  font: bold 12px Consolas, monospace;
+  cursor: pointer;
+}
+button:hover { filter: brightness(1.12); }
+button.secondary {
+  background: transparent; color: var(--text);
+  border-color: var(--line);
+}
+button:active { transform: scale(.98); }
+button:focus-visible { outline: 2px solid white; outline-offset: 3px; }
+.footer { color: #657183; font-size: 10px; text-align: center; margin-top: 28px; }
+@media (max-width: 480px) {
+  main { margin: 18px auto; }
+  .panel { padding: 17px; }
+  .buttons button { flex: 1; }
+}
+</style>
+</head>
+<body>
+<main>
+  <header class="top">
+    <div class="logo">&gt;_</div>
+    <div>
+      <h1>LOADSTRING <span>GEN</span></h1>
+      <div class="subtitle">ROBLOX SCRIPT WRAPPER // V1.0</div>
+    </div>
+  </header>
+
+  <section class="panel">
+    <label class="label" for="raw">01 / RAW SCRIPT URL</label>
+    <input id="raw" type="url"
+      placeholder="https://raw.githubusercontent.com/user/repo/main/script.lua"
+      autocomplete="off" spellcheck="false">
+    <div class="hint">
+      粘贴 GitHub Raw 链接，代码会自动生成。<br>
+      支持 raw.githubusercontent.com 链接。
+    </div>
+    <div id="status" class="status">等待输入链接...</div>
+  </section>
+
+  <section class="panel">
+    <div class="output-head">
+      <label class="label" for="output" style="margin:0">02 / GENERATED CODE</label>
+      <span class="badge">LIVE OUTPUT</span>
+    </div>
+    <textarea id="output" readonly spellcheck="false"
+      placeholder="生成的 loadstring 代码会显示在这里..."></textarea>
+    <div class="buttons">
+      <button id="copy">COPY CODE ↗</button>
+      <button id="clear" class="secondary">CLEAR</button>
+    </div>
+    <div class="hint">
+      复制生成的代码后，粘贴到你使用的 Roblox Lua 环境中。
+    </div>
+  </section>
+
+  <div class="footer">LOADSTRING GEN // BUILT FOR SCRIPT FORMATTING</div>
+</main>
+
+<script>
+const rawInput = document.getElementById("raw");
+const output = document.getElementById("output");
+const status = document.getElementById("status");
+const copyButton = document.getElementById("copy");
+const clearButton = document.getElementById("clear");
+
+function update() {
+  const url = rawInput.value.trim();
+
+  if (!url) {
+    output.value = "";
+    status.textContent = "等待输入链接...";
+    status.className = "status";
+    return;
+  }
+
+  try {
+    const parsed = new URL(url);
+
+    if (
+      parsed.protocol !== "https:" ||
+      parsed.hostname !== "raw.githubusercontent.com" ||
+      parsed.username ||
+      parsed.password ||
+      parsed.search ||
+      parsed.hash ||
+      parsed.pathname.split("/").some(part => part === "." || part === "..") ||
+      parsed.pathname.split("/").filter(Boolean).length < 4
+    ) {
+      throw new Error("invalid");
+    }
+
+    output.value =
+      'loadstring(game:HttpGet("' + parsed.href + '"))()';
+
+    status.textContent = "✓ 链接格式正确，已自动生成代码";
+    status.className = "status ok";
+  } catch {
+    output.value = "";
+    status.textContent =
+      "请输入有效的 GitHub Raw HTTPS 链接";
+    status.className = "status";
+  }
+}
+
+rawInput.addEventListener("input", update);
+
+copyButton.addEventListener("click", async () => {
+  if (!output.value) {
+    status.textContent = "请先输入有效的 Raw 链接";
+    return;
+  }
+
+  try {
+    await navigator.clipboard.writeText(output.value);
+    status.textContent = "✓ 已复制完整代码";
+    status.className = "status ok";
+  } catch {
+    output.focus();
+    output.select();
+    const success = document.execCommand("copy");
+    status.textContent = success
+      ? "✓ 已复制完整代码"
+      : "复制失败，请长按代码并手动复制";
+    status.className = success ? "status ok" : "status";
+  }
+});
+
+clearButton.addEventListener("click", () => {
+  rawInput.value = "";
+  output.value = "";
+  status.textContent = "已清空，等待输入链接...";
+  status.className = "status";
+  rawInput.focus();
+});
+</script>
+</body>
+</html>
