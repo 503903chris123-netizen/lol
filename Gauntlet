@@ -3,19 +3,21 @@
 --========================================================--
 -- 2x Miracle -> Lv4, 完成后疯狂尝试放置其他所有塔 (有什么放什么)
 -- 新增 Pinata (原理同 TreeOfLife)
--- UI: 按名字从 GetAllData 识别已带塔, 分类卡片显示 (RightControl 显示/隐藏)
---
+-- UI: 按名字从 GetAllData 识别已带塔, 分类卡片显示
+--     每个塔一个小卡片: 显示放置数量 + 每个等级 (例: x2 · Lv3｜Lv4)
+--     右侧可拖动小按钮 / RightControl 显示/隐藏 UI
+
 -- 分类规则:
 --  Starter : Miracle / Harvester  -> 带1个或2个都行, 带1个要带辅助, 带2个不需要辅助
 --  Damage  : KingOfCursesEvo + StrongestSorcererEvo 必须都带
---  Farm    : TreeOfLife / FrostBlossom / Pinata / Kogane 只能带一个 (Kogane 需要 KingOfCursesEvo)
+--  Farm    : TreeOfLife / FrostBlossom / Pinata / Kogane / SorcererAgent 5选1 (Agent 目标4个) (Kogane 需要 KingOfCursesEvo)
 --  Support : StrongestSorcerer / KingOfCursesFrost
 --========================================================--
 
 local environment = getgenv()
 
 if environment.ScriptInitialized then
-    return
+	return
 end
 
 environment.ScriptInitialized = true
@@ -63,82 +65,82 @@ local GojoDomain = Remotes:WaitForChild("GojoDomain")
 local MAX_PERFORMANCE = true
 
 local DESTROY_CLASSES = {
-    ParticleEmitter = true, Trail = true, Beam = true, Smoke = true,
-    Fire = true, Sparkles = true, Highlight = true, PointLight = true,
-    SpotLight = true, SurfaceLight = true, SurfaceAppearance = true,
+	ParticleEmitter = true, Trail = true, Beam = true, Smoke = true,
+	Fire = true, Sparkles = true, Highlight = true, PointLight = true,
+	SpotLight = true, SurfaceLight = true, SurfaceAppearance = true,
 }
 
 local function OptimizeObject(obj)
-    if not MAX_PERFORMANCE then return end
+	if not MAX_PERFORMANCE then return end
 
-    pcall(function()
-        if DESTROY_CLASSES[obj.ClassName] then
-            obj:Destroy()
-            return
-        end
+	pcall(function()
+		if DESTROY_CLASSES[obj.ClassName] then
+			obj:Destroy()
+			return
+		end
 
-        if obj:IsA("BasePart") then
-            obj.Material = Enum.Material.SmoothPlastic
-            obj.Reflectance = 0
-            obj.CastShadow = false
-            obj.MaterialVariant = ""
-            if obj:IsA("MeshPart") then
-                obj.TextureID = ""
-            end
-        elseif obj:IsA("SpecialMesh") then
-            obj.TextureId = ""
-        elseif obj:IsA("Texture") or obj:IsA("Decal") then
-            obj.Texture = ""
-            obj.Transparency = 1
-        end
-    end)
+		if obj:IsA("BasePart") then
+			obj.Material = Enum.Material.SmoothPlastic
+			obj.Reflectance = 0
+			obj.CastShadow = false
+			obj.MaterialVariant = ""
+			if obj:IsA("MeshPart") then
+				obj.TextureID = ""
+			end
+		elseif obj:IsA("SpecialMesh") then
+			obj.TextureId = ""
+		elseif obj:IsA("Texture") or obj:IsA("Decal") then
+			obj.Texture = ""
+			obj.Transparency = 1
+		end
+	end)
 end
 
 pcall(function()
-    Lighting.GlobalShadows = false
-    Lighting.Brightness = 1
-    Lighting.EnvironmentDiffuseScale = 0
-    Lighting.EnvironmentSpecularScale = 0
-    Lighting.FogEnd = 100000
-    Lighting.FogStart = 100000
+	Lighting.GlobalShadows = false
+	Lighting.Brightness = 1
+	Lighting.EnvironmentDiffuseScale = 0
+	Lighting.EnvironmentSpecularScale = 0
+	Lighting.FogEnd = 100000
+	Lighting.FogStart = 100000
 end)
 
 for _, obj in ipairs(Lighting:GetChildren()) do
-    pcall(function()
-        if obj:IsA("PostEffect") or obj:IsA("Atmosphere") or obj:IsA("Sky") then
-            obj:Destroy()
-        end
-    end)
+	pcall(function()
+		if obj:IsA("PostEffect") or obj:IsA("Atmosphere") or obj:IsA("Sky") then
+			obj:Destroy()
+		end
+	end)
 end
 
 task.spawn(function()
-    for _, obj in ipairs(Workspace:GetDescendants()) do
-        OptimizeObject(obj)
-    end
-    for _, obj in ipairs(Lighting:GetDescendants()) do
-        OptimizeObject(obj)
-    end
-    print("[MAX PERFORMANCE] 初始优化完成")
+	for _, obj in ipairs(Workspace:GetDescendants()) do
+		OptimizeObject(obj)
+	end
+	for _, obj in ipairs(Lighting:GetDescendants()) do
+		OptimizeObject(obj)
+	end
+	print("[MAX PERFORMANCE] 初始优化完成")
 end)
 
 Workspace.DescendantAdded:Connect(function(obj)
-    task.defer(function() OptimizeObject(obj) end)
+	task.defer(function() OptimizeObject(obj) end)
 end)
 
 Lighting.DescendantAdded:Connect(function(obj)
-    task.defer(function() OptimizeObject(obj) end)
+	task.defer(function() OptimizeObject(obj) end)
 end)
 
 task.spawn(function()
-    while task.wait(2) do
-        if MAX_PERFORMANCE then
-            pcall(function()
-                for _, obj in ipairs(Workspace:GetDescendants()) do
-                    OptimizeObject(obj)
-                end
-            end)
-        end
-    end
+	while task.wait(2) do
+		if MAX_PERFORMANCE then
+			pcall(function()
+				for _, obj in ipairs(Workspace:GetDescendants()) do
+					OptimizeObject(obj)
+				end
+			end)
+		end
+	end
 end)
 
 --========================================================--
@@ -146,27 +148,27 @@ end)
 --========================================================--
 
 local TOWER_NAMES = {
-    BASIC     = "MiracleSorcerer",
-    CHEAP     = "SorcererAgent",
-    B85       = "KingOfCursesFrost",
-    GOJO      = "StrongestSorcererEvo",
-    KING      = "KingOfCursesEvo",
-    STRONGEST = "StrongestSorcerer",
-    FROST     = "FrostBlossom",
-    HARVESTER = "HarvesterCurse",
-    TREE      = "TreeOfLife",
-    KOGANE    = "Kogane",
-    PINATA    = "Pinata",
+	BASIC     = "MiracleSorcerer",
+	CHEAP     = "SorcererAgent",
+	B85       = "KingOfCursesFrost",
+	GOJO      = "StrongestSorcererEvo",
+	KING      = "KingOfCursesEvo",
+	STRONGEST = "StrongestSorcerer",
+	FROST     = "FrostBlossom",
+	HARVESTER = "HarvesterCurse",
+	TREE      = "TreeOfLife",
+	KOGANE    = "Kogane",
+	PINATA    = "Pinata",
 }
 
 -- 名字严格匹配: 名字后面只允许跟数字/空格/下划线/括号等, 避免把 Evo 和非 Evo 搞混
 local function NameMatches(instName, base)
-    local n = string.lower(tostring(instName))
-    local b = string.lower(base)
-    if string.sub(n, 1, #b) ~= b then
-        return false
-    end
-    return string.match(string.sub(n, #b + 1), "^[%s%d_%-%.%(%)]*$") ~= nil
+	local n = string.lower(tostring(instName))
+	local b = string.lower(base)
+	if string.sub(n, 1, #b) ~= b then
+		return false
+	end
+	return string.match(string.sub(n, #b + 1), "^[%s%d_%-%.%(%)]*$") ~= nil
 end
 
 --========================================================--
@@ -175,13 +177,13 @@ end
 
 local FROST_BLOSSOM_UUID = "8613297d-16e2-428c-a452-db67a7234ad4"
 local FROST_BLOSSOM_CFRAME =
-    CFrame.new(117.70, 37.32, -126.20)
-    * CFrame.Angles(-3.1415927410125732, -8.742277657347586e-08, -3.1415927410125732)
+	CFrame.new(117.70, 37.32, -126.20)
+	* CFrame.Angles(-3.1415927410125732, -8.742277657347586e-08, -3.1415927410125732)
 
 local KOGANE_UUID = "f4794151-3ac0-47a5-8dab-05829561c830"
 local KOGANE_CFRAME =
-    CFrame.new(51.30082702636719, 35.8748779296875, -124.45922088623047)
-    * CFrame.Angles(-3.1415927410125732, 0, -3.1415927410125732)
+	CFrame.new(51.30082702636719, 35.8748779296875, -124.45922088623047)
+	* CFrame.Angles(-3.1415927410125732, 0, -3.1415927410125732)
 
 -- Pinata: 默认按名字解析 UUID (和 TreeOfLife 一样). 想固定 UUID 就在这里填.
 local PINATA_UUID = nil
@@ -196,72 +198,72 @@ local dataLoaded = false
 local lastRefresh = 0
 
 local function RefreshTowerData(force)
-    local now = tick()
+	local now = tick()
 
-    if not force and now - lastRefresh < 3 then
-        return dataLoaded
-    end
+	if not force and now - lastRefresh < 3 then
+		return dataLoaded
+	end
 
-    local ok, data = pcall(function()
-        return GetAllData:InvokeServer()
-    end)
+	local ok, data = pcall(function()
+		return GetAllData:InvokeServer()
+	end)
 
-    if not ok or type(data) ~= "table" or type(data.Towers) ~= "table" then
-        return false
-    end
+	if not ok or type(data) ~= "table" or type(data.Towers) ~= "table" then
+		return false
+	end
 
-    lastRefresh = now
+	lastRefresh = now
 
-    -- 是否存在 Equipped 字段 (没有的话, 按名字能找到就算已带)
-    local hasFlag = false
-    for _, t in pairs(data.Towers) do
-        if type(t) == "table" and t.Equipped ~= nil then
-            hasFlag = true
-            break
-        end
-    end
+	-- 是否存在 Equipped 字段 (没有的话, 按名字能找到就算已带)
+	local hasFlag = false
+	for _, t in pairs(data.Towers) do
+		if type(t) == "table" and t.Equipped ~= nil then
+			hasFlag = true
+			break
+		end
+	end
 
-    local newEquipped = {}
-    local newUUID = {}
-    local newUUIDIsEquipped = {}
+	local newEquipped = {}
+	local newUUID = {}
+	local newUUIDIsEquipped = {}
 
-    for _, t in pairs(data.Towers) do
-        if type(t) == "table" and t.Name and t.UUID then
-            for _, base in pairs(TOWER_NAMES) do
-                if NameMatches(t.Name, base) then
-                    local isEq = (not hasFlag) or (t.Equipped == true)
-                    if isEq then
-                        newEquipped[base] = true
-                    end
-                    if not newUUID[base] or (isEq and not newUUIDIsEquipped[base]) then
-                        newUUID[base] = t.UUID
-                        newUUIDIsEquipped[base] = isEq
-                    end
-                end
-            end
-        end
-    end
+	for _, t in pairs(data.Towers) do
+		if type(t) == "table" and t.Name and t.UUID then
+			for _, base in pairs(TOWER_NAMES) do
+				if NameMatches(t.Name, base) then
+					local isEq = (not hasFlag) or (t.Equipped == true)
+					if isEq then
+						newEquipped[base] = true
+					end
+					if not newUUID[base] or (isEq and not newUUIDIsEquipped[base]) then
+						newUUID[base] = t.UUID
+						newUUIDIsEquipped[base] = isEq
+					end
+				end
+			end
+		end
+	end
 
-    uuidCache = newUUID
-    equippedSet = newEquipped
-    dataLoaded = true
-    return true
+	uuidCache = newUUID
+	equippedSet = newEquipped
+	dataLoaded = true
+	return true
 end
 
 local function ResolveUUID(towerName)
-    if not uuidCache[towerName] then
-        RefreshTowerData(true)
-    end
-    return uuidCache[towerName]
+	if not uuidCache[towerName] then
+		RefreshTowerData(true)
+	end
+	return uuidCache[towerName]
 end
 
 task.spawn(function()
-    while not RefreshTowerData(true) do
-        task.wait(1)
-    end
-    while task.wait(5) do
-        pcall(RefreshTowerData, true)
-    end
+	while not RefreshTowerData(true) do
+		task.wait(1)
+	end
+	while task.wait(5) do
+		pcall(RefreshTowerData, true)
+	end
 end)
 
 --========================================================--
@@ -271,82 +273,91 @@ end)
 -- basic: Miracle/Harvester 位置, cheap: SorcererAgent/Tree/Pinata 位置
 -- main: Gojo/King/Strongest/Frost 位置, b85: KingOfCursesFrost 位置
 local function BuildPos(basic, cheap, main, b85)
-    return {
-        BASIC     = basic,
-        CHEAP     = cheap,
-        B85       = b85 or main,
-        GOJO      = main,
-        KING      = main,
-        STRONGEST = main,
-        FROST     = main,
-        HARVESTER = basic,
-        TREE      = cheap,
-        PINATA    = cheap,
-    }
+	return {
+		BASIC     = basic,
+		CHEAP     = cheap,
+		B85       = b85 or main,
+		GOJO      = main,
+		KING      = main,
+		STRONGEST = main,
+		FROST     = main,
+		HARVESTER = basic,
+		TREE      = cheap,
+		PINATA    = cheap,
+	}
 end
 
 local POSITIONS = {
-    Jogo = BuildPos(
-        CFrame.new(-42.24, 13, -108.03),
-        CFrame.new(-31.248558044433594, 13.275632858276367, -142.10992431640625),
-        CFrame.new(-3.71, 14.77, -106.33)
-    ),
-    JujutsuHigh = BuildPos(
-        CFrame.new(-23.73, 15.21, -83.58),
-        CFrame.new(31.04, 14.91, -14.07),
-        CFrame.new(-14.10, 15.06, -98.60)
-    ),
-    Toji = BuildPos(
-        CFrame.new(-31.11, 8.60, -34.43),
-        CFrame.new(-111.80, 8.60, -63.30),
-        CFrame.new(-40.19, 8.60, -61.18)
-    ),
-    Beach = BuildPos(
-        CFrame.new(57.55, 10.45, -162.00),
-        CFrame.new(93.45, 10.21, -138.19),
-        CFrame.new(51.32, 10.24, -128.84)
-    ),
-    Dagon = BuildPos(
-        CFrame.new(1.46, 53.80, -89.49),
-        CFrame.new(-8.60, 59.32, -152.34),
-        CFrame.new(-22.31, 53.88, -102.14),
-        CFrame.new(-32.12, 53.80, -125.21)
-    ),
-    Meguna = BuildPos(
-        CFrame.new(-41.10, 25.59, -180.09),
-        CFrame.new(16.74, 29.04, -154.48),
-        CFrame.new(-24.43, 25.59, -111.47)
-    ),
-    Shibuya = BuildPos(
-        CFrame.new(126, 38, -133),
-        CFrame.new(113, 38, -131),
-        CFrame.new(113, 38, -131)
-    ),
+	Jogo = BuildPos(
+		CFrame.new(-42.24, 13, -108.03),
+		CFrame.new(-31.248558044433594, 13.275632858276367, -142.10992431640625),
+		CFrame.new(-3.71, 14.77, -106.33)
+	),
+	JujutsuHigh = BuildPos(
+		CFrame.new(-5.4, 15.8, -90.2),
+		CFrame.new(31.04, 14.91, -14.07),
+		CFrame.new(-14.10, 15.06, -98.60)
+	),
+	Toji = BuildPos(
+		CFrame.new(-31.11, 8.60, -34.43),
+		CFrame.new(-111.80, 8.60, -63.30),
+		CFrame.new(-40.19, 8.60, -61.18)
+	),
+	Beach = BuildPos(
+		CFrame.new(57.55, 10.45, -162.00),
+		CFrame.new(93.45, 10.21, -138.19),
+		CFrame.new(51.32, 10.24, -128.84)
+	),
+	Dagon = BuildPos(
+		CFrame.new(1.46, 53.80, -89.49),
+		CFrame.new(-8.60, 59.32, -152.34),
+		CFrame.new(-22.31, 53.88, -102.14),
+		CFrame.new(-32.12, 53.80, -125.21)
+	),
+	Meguna = BuildPos(
+		CFrame.new(-41.10, 25.59, -180.09),
+		CFrame.new(16.74, 29.04, -154.48),
+		CFrame.new(-24.43, 25.59, -111.47)
+	),
+	Shibuya = BuildPos(
+		CFrame.new(126, 38, -133),
+		CFrame.new(113, 38, -131),
+		CFrame.new(113, 38, -131)
+	),
 }
+
+-- JujutsuHigh: 农场塔 (Tree / Pinata / Frost) 和 Starter 放在一起, Kogane 不变
+do
+	local jj = POSITIONS.JujutsuHigh
+	jj.TREE = jj.BASIC
+	jj.PINATA = jj.BASIC
+	jj.FROST = jj.BASIC
+	jj.CHEAP = jj.BASIC
+end
 
 local MAP_ORDER = { "Jogo", "JujutsuHigh", "Toji", "Beach", "Dagon", "Meguna", "Shibuya" }
 local currentMap = nil
 
 local function DetectMap()
-    local map = Workspace:FindFirstChild("Map")
-    if not map then return nil end
-    for _, name in ipairs(MAP_ORDER) do
-        if map:FindFirstChild(name) then
-            return name
-        end
-    end
-    return nil
+	local map = Workspace:FindFirstChild("Map")
+	if not map then return nil end
+	for _, name in ipairs(MAP_ORDER) do
+		if map:FindFirstChild(name) then
+			return name
+		end
+	end
+	return nil
 end
 
 local function IsInGame()
-    return DetectMap() ~= nil
+	return DetectMap() ~= nil
 end
 
 local function GetPositions()
-    local detected = DetectMap()
-    if detected then currentMap = detected end
-    if not currentMap then return nil end
-    return POSITIONS[currentMap]
+	local detected = DetectMap()
+	if detected then currentMap = detected end
+	if not currentMap then return nil end
+	return POSITIONS[currentMap]
 end
 
 --========================================================--
@@ -354,130 +365,172 @@ end
 --========================================================--
 
 local function GetTowerLevel(tower)
-    local attr = tower:GetAttribute("Level")
-    if typeof(attr) == "number" then return attr end
+	local attr = tower:GetAttribute("Level")
+	if typeof(attr) == "number" then return attr end
 
-    local levelValue = tower:FindFirstChild("Level") or tower:FindFirstChild("level")
-    if levelValue and tonumber(levelValue.Value) then
-        return tonumber(levelValue.Value)
-    end
+	local levelValue = tower:FindFirstChild("Level") or tower:FindFirstChild("level")
+	if levelValue and tonumber(levelValue.Value) then
+		return tonumber(levelValue.Value)
+	end
 
-    local level = tonumber(string.match(tower.Name, "%d+"))
-    return level or 1
+	local level = tonumber(string.match(tower.Name, "%d+"))
+	return level or 1
 end
 
 local function GetTowersByName(name)
-    local towers = Workspace:FindFirstChild("Towers")
-    if not towers then return {} end
+	local towers = Workspace:FindFirstChild("Towers")
+	if not towers then return {} end
 
-    local result = {}
-    for _, t in ipairs(towers:GetChildren()) do
-        if NameMatches(t.Name, name) then
-            table.insert(result, t)
-        end
-    end
-    return result
+	local result = {}
+	for _, t in ipairs(towers:GetChildren()) do
+		if NameMatches(t.Name, name) then
+			table.insert(result, t)
+		end
+	end
+	return result
 end
 
 local function AllMiracleAtLeast(level)
-    local miracles = GetTowersByName(TOWER_NAMES.BASIC)
-    if #miracles < 2 then return false end
-    for _, t in ipairs(miracles) do
-        if GetTowerLevel(t) < level then return false end
-    end
-    return true
+	local miracles = GetTowersByName(TOWER_NAMES.BASIC)
+	if #miracles < 2 then return false end
+	for _, t in ipairs(miracles) do
+		if GetTowerLevel(t) < level then return false end
+	end
+	return true
 end
 
 local function GetKingTower()
-    local kings = GetTowersByName(TOWER_NAMES.KING)
-    return kings[1]
+	local kings = GetTowersByName(TOWER_NAMES.KING)
+	return kings[1]
 end
 
 --========================================================--
 -- PLACE TOWER
 --========================================================--
 
+-- 目标数量: 没到目标就补 (包括塔被删后), 到了就不放. Wave 50 后 _G.stopAll 会停止一切.
+local TARGET_COUNT = {
+	BASIC     = 2,  -- Miracle
+	HARVESTER = 1,
+	KING      = 1,  -- KingOfCursesEvo
+	GOJO      = 1,  -- StrongestSorcererEvo
+	TREE      = 1,
+	FROST     = 1,
+	PINATA    = 1,
+	KOGANE    = 1,
+	STRONGEST = 1,  -- 辅助
+	B85       = 1,  -- 辅助 (KingOfCursesFrost)
+	CHEAP     = 4,  -- SorcererAgent (farm 类型, 4 个)
+}
+
+-- 放置成功后塔出现在 Workspace 需要一点时间, 冷却期内不重复放, 防止超出目标数量
+local lastPlaced = {}
+local PLACE_COOLDOWN = 0.5
+
+-- 农场塔 (TreeOfLife / FrostBlossom / Pinata / Kogane) 的 UUID 取自 LocalPlayer.Equipped5.Value
+local FARM_KEYS = { TREE = true, FROST = true, PINATA = true, KOGANE = true, CHEAP = true }
+
+local function GetFarmUUID()
+	local v = LocalPlayer:FindFirstChild("Equipped5")
+	local val = v and v.Value
+	if type(val) == "string" and val ~= "" then
+		return val
+	end
+	return nil
+end
+
 local function PlaceTower(nameKey)
-    if _G.stopAll then return false end
+	if _G.stopAll then return false end
 
-    local towerName = TOWER_NAMES[nameKey]
-    if not towerName then return false end
+	local towerName = TOWER_NAMES[nameKey]
+	if not towerName then return false end
 
-    -- 有什么放什么: 按名字获取不到(没带)的塔直接跳过
-    if dataLoaded and not equippedSet[towerName] then
-        return false
-    end
+	-- 有什么放什么: 按名字获取不到(没带)的塔直接跳过
+	if dataLoaded and not equippedSet[towerName] then
+		return false
+	end
 
-    -- FrostBlossom: 固定 UUID / 固定位置
-    if nameKey == "FROST" then
-        local ok, ret = pcall(function()
-            return SpawnNewTower:InvokeServer(FROST_BLOSSOM_UUID, FROST_BLOSSOM_CFRAME)
-        end)
-        if ok and ret then
-            _G.frostPlaced = true
-            return true
-        end
-        return false
-    end
+	-- 目标数量: 已达到就不放, 没到(或被删了)就补
+	local target = TARGET_COUNT[nameKey] or 1
+	if #GetTowersByName(towerName) >= target then
+		return false
+	end
+	if tick() - (lastPlaced[nameKey] or 0) < PLACE_COOLDOWN then
+		return false
+	end
 
-    -- Kogane: 固定 UUID / 固定位置 / 第三个参数绑定 KingOfCursesEvo
-    if nameKey == "KOGANE" then
-        local king = GetKingTower()
-        if not king then return false end
+	-- FrostBlossom: 固定 UUID / 固定位置
+	if nameKey == "FROST" then
+		local farmUUID = GetFarmUUID()
+		if not farmUUID then return false end
 
-        local ok, ret = pcall(function()
-            return SpawnNewTower:InvokeServer(KOGANE_UUID, KOGANE_CFRAME, king)
-        end)
-        return ok and ret and true or false
-    end
+		local frostCFrame = FROST_BLOSSOM_CFRAME
+		if DetectMap() == "JujutsuHigh" then
+			local pt = GetPositions()
+			if pt and pt.FROST then frostCFrame = pt.FROST end
+		end
 
-    -- 普通塔 (含 Pinata)
-    local posTable = GetPositions()
-    if not posTable then return false end
+		local ok, ret = pcall(function()
+			return SpawnNewTower:InvokeServer(farmUUID, frostCFrame)
+		end)
+		if ok and ret then
+			_G.frostPlaced = true
+			lastPlaced[nameKey] = tick()
+			return true
+		end
+		return false
+	end
 
-    local pos = posTable[nameKey]
-    if not pos then return false end
+	-- Kogane: 固定 UUID / 固定位置 / 第三个参数绑定 KingOfCursesEvo
+	if nameKey == "KOGANE" then
+		local king = GetKingTower()
+		if not king then return false end
 
-    local uuid
-    if nameKey == "PINATA" and PINATA_UUID then
-        uuid = PINATA_UUID
-    else
-        uuid = ResolveUUID(towerName)
-        if not uuid then
-            RefreshTowerData(true)
-            uuid = ResolveUUID(towerName)
-            if not uuid then return false end
-        end
-    end
+		local farmUUID = GetFarmUUID()
+		if not farmUUID then return false end
 
-    local ok, ret = pcall(function()
-        return SpawnNewTower:InvokeServer(uuid, pos)
-    end)
+		local ok, ret = pcall(function()
+			return SpawnNewTower:InvokeServer(farmUUID, KOGANE_CFRAME, king)
+		end)
+		if ok and ret then
+			lastPlaced[nameKey] = tick()
+			return true
+		end
+		return false
+	end
 
-    if not ok or not ret then
-        uuidCache[towerName] = nil
-        return false
-    end
+	-- 普通塔 (含 Pinata)
+	local posTable = GetPositions()
+	if not posTable then return false end
 
-    task.spawn(function()
-        task.wait(0.1)
-        pcall(function()
-            local towersFolder = Workspace:FindFirstChild("Towers")
-            if not towersFolder then return end
+	local pos = posTable[nameKey]
+	if not pos then return false end
 
-            for _, t in ipairs(towersFolder:GetChildren()) do
-                if NameMatches(t.Name, towerName) then
-                    for _ = 1, 3 do
-                        ChangeTowerMode:InvokeServer(t)
-                        task.wait(0.1)
-                    end
-                    break
-                end
-            end
-        end)
-    end)
+	local uuid
+	if FARM_KEYS[nameKey] then
+		-- 所有农场塔: UUID 只从 Equipped5.Value 获取
+		uuid = GetFarmUUID()
+		if not uuid then return false end
+	else
+		uuid = ResolveUUID(towerName)
+		if not uuid then
+			RefreshTowerData(true)
+			uuid = ResolveUUID(towerName)
+			if not uuid then return false end
+		end
+	end
 
-    return true
+	local ok, ret = pcall(function()
+		return SpawnNewTower:InvokeServer(uuid, pos)
+	end)
+
+	if not ok or not ret then
+		uuidCache[towerName] = nil
+		return false
+	end
+
+	lastPlaced[nameKey] = tick()
+	return true
 end
 
 --========================================================--
@@ -485,12 +538,12 @@ end
 --========================================================--
 
 local function ProcessMiracle()
-    if _G.stopAll then return end
+	if _G.stopAll then return end
 
-    local miracles = GetTowersByName(TOWER_NAMES.BASIC)
-    if #miracles < 2 then
-        PlaceTower("BASIC")
-    end
+	local miracles = GetTowersByName(TOWER_NAMES.BASIC)
+	if #miracles < 2 then
+		PlaceTower("BASIC")
+	end
 end
 
 --========================================================--
@@ -498,64 +551,65 @@ end
 --========================================================--
 
 local function UpgradeLoop()
-    if _G.stopAll then return end
+	if _G.stopAll then return end
 
-    local towersFolder = Workspace:FindFirstChild("Towers")
-    if not towersFolder then return end
+	local towersFolder = Workspace:FindFirstChild("Towers")
+	if not towersFolder then return end
 
-    local miracles = {}
-    for _, t in ipairs(towersFolder:GetChildren()) do
-        if NameMatches(t.Name, TOWER_NAMES.BASIC) then
-            table.insert(miracles, t)
-        end
-    end
+	local miracles = {}
+	for _, t in ipairs(towersFolder:GetChildren()) do
+		if NameMatches(t.Name, TOWER_NAMES.BASIC) then
+			table.insert(miracles, t)
+		end
+	end
 
-    -- Miracle 阶段
-    if not _G.miraclePhaseComplete then
-        if #miracles < 2 then return end
+	-- Miracle 阶段
+	if not _G.miraclePhaseComplete then
+		if #miracles < 2 then return end
 
-        table.sort(miracles, function(a, b)
-            return GetTowerLevel(a) < GetTowerLevel(b)
-        end)
+		table.sort(miracles, function(a, b)
+			return GetTowerLevel(a) < GetTowerLevel(b)
+		end)
 
-        for _, tower in ipairs(miracles) do
-            if GetTowerLevel(tower) < 4 then
-                pcall(function() UpgradeTower:InvokeServer(tower) end)
-                return
-            end
-        end
+		for _, tower in ipairs(miracles) do
+			if GetTowerLevel(tower) < 4 then
+				pcall(function() UpgradeTower:InvokeServer(tower) end)
+				return
+			end
+		end
 
-        if AllMiracleAtLeast(4) then
-            _G.miraclePhaseComplete = true
-            print("[系统] Miracle Phase 完成")
-        end
-        return
-    end
+		if AllMiracleAtLeast(4) then
+			_G.miraclePhaseComplete = true
+			print("[系统] Miracle Phase 完成")
+		end
+		return
+	end
 
-    -- 其他塔升级
-    for _, tower in ipairs(towersFolder:GetChildren()) do
-        if not NameMatches(tower.Name, TOWER_NAMES.BASIC) then
-            local affected =
-                NameMatches(tower.Name, TOWER_NAMES.B85)
-                or NameMatches(tower.Name, TOWER_NAMES.GOJO)
-                or NameMatches(tower.Name, TOWER_NAMES.KING)
-                or NameMatches(tower.Name, TOWER_NAMES.HARVESTER)
-                or NameMatches(tower.Name, TOWER_NAMES.TREE)
-                or NameMatches(tower.Name, TOWER_NAMES.KOGANE)
+	-- 其他塔升级
+	for _, tower in ipairs(towersFolder:GetChildren()) do
+		local isBasic = NameMatches(tower.Name, TOWER_NAMES.BASIC)
+		if (not isBasic) or GetTowerLevel(tower) < 4 then
+			local affected =
+				NameMatches(tower.Name, TOWER_NAMES.B85)
+				or NameMatches(tower.Name, TOWER_NAMES.GOJO)
+				or NameMatches(tower.Name, TOWER_NAMES.KING)
+				or NameMatches(tower.Name, TOWER_NAMES.HARVESTER)
+				or NameMatches(tower.Name, TOWER_NAMES.TREE)
+				or NameMatches(tower.Name, TOWER_NAMES.KOGANE)
 
-            if not (_G.upgradeBlocked and affected) then
-                pcall(function() UpgradeTower:InvokeServer(tower) end)
-            end
-        end
-    end
+			if not (_G.upgradeBlocked and affected) then
+				pcall(function() UpgradeTower:InvokeServer(tower) end)
+			end
+		end
+	end
 end
 
 task.spawn(function()
-    while task.wait(0.3) do
-        if IsInGame() and not _G.stopAll then
-            pcall(UpgradeLoop)
-        end
-    end
+	while task.wait(0.3) do
+		if IsInGame() and not _G.stopAll then
+			pcall(UpgradeLoop)
+		end
+	end
 end)
 
 --========================================================--
@@ -563,21 +617,21 @@ end)
 --========================================================--
 
 local function CheckSnail()
-    local mobs = Workspace:FindFirstChild("Mobs")
-    if mobs and mobs:FindFirstChild("ImmortalSnail") then
-        _G.snailPresent = true
-        _G.upgradeBlocked = true
-        return true
-    end
-    _G.snailPresent = false
-    _G.upgradeBlocked = false
-    return false
+	local mobs = Workspace:FindFirstChild("Mobs")
+	if mobs and mobs:FindFirstChild("ImmortalSnail") then
+		_G.snailPresent = true
+		_G.upgradeBlocked = true
+		return true
+	end
+	_G.snailPresent = false
+	_G.upgradeBlocked = false
+	return false
 end
 
 task.spawn(function()
-    while task.wait(0.5) do
-        if IsInGame() then pcall(CheckSnail) end
-    end
+	while task.wait(0.5) do
+		if IsInGame() then pcall(CheckSnail) end
+	end
 end)
 
 --========================================================--
@@ -585,22 +639,22 @@ end)
 --========================================================--
 
 local function AutoSkipOnce()
-    if _G.autoSkipCalled then return end
-    if not IsInGame() then return end
+	if _G.autoSkipCalled then return end
+	if not IsInGame() then return end
 
-    pcall(function()
-        AutoSkip:FireServer()
-        _G.autoSkipCalled = true
-        print("[系统] AutoSkip 已调用")
-    end)
+	pcall(function()
+		AutoSkip:FireServer()
+		_G.autoSkipCalled = true
+		print("[系统] AutoSkip 已调用")
+	end)
 end
 
 task.spawn(function()
-    while task.wait(1) do
-        if not _G.autoSkipCalled then
-            pcall(AutoSkipOnce)
-        end
-    end
+	while task.wait(1) do
+		if not _G.autoSkipCalled then
+			pcall(AutoSkipOnce)
+		end
+	end
 end)
 
 --========================================================--
@@ -608,91 +662,141 @@ end)
 --========================================================--
 
 local ALL_AFTER_MIRACLE = {
-    "HARVESTER",
-    "TREE",
-    "PINATA",
-    "CHEAP",
-    "B85",
-    "GOJO",
-    "KING",
-    "STRONGEST",
-    "FROST",
-    "KOGANE",
+	"BASIC",      -- Miracle 被删后补到 2 个
+	"HARVESTER",
+	"TREE",
+	"PINATA",
+	"CHEAP",
+	"B85",
+	"GOJO",
+	"KING",
+	"STRONGEST",
+	"FROST",
+	"KOGANE",
 }
 
 local function SpamPlaceOthers()
-    if not _G.miraclePhaseComplete then return end
-    if _G.stopAll then return end
+	if not _G.miraclePhaseComplete then return end
+	if _G.stopAll then return end
 
-    for _, nameKey in ipairs(ALL_AFTER_MIRACLE) do
-        if _G.stopAll then break end
-        PlaceTower(nameKey)
-        task.wait(0.03)
-    end
+	for _, nameKey in ipairs(ALL_AFTER_MIRACLE) do
+		if _G.stopAll then break end
+		PlaceTower(nameKey)
+		task.wait(0.03)
+	end
 end
 
 --========================================================--
 -- MAIN FLOW
 --========================================================--
 
+local function ProcessFlowInner()
+	if _G.stopAll then return end
+	if not IsInGame() then return end
+
+	if environment.Stage == 0 then
+		-- 没带 Miracle 就直接跳过 Miracle 阶段, 有什么放什么
+		if dataLoaded and not equippedSet[TOWER_NAMES.BASIC] then
+			_G.miraclePhaseComplete = true
+			environment.Stage = 1
+			print("[系统] 未带 Miracle, 跳过 Miracle 阶段")
+			return
+		end
+
+		ProcessMiracle()
+
+		local miracles = GetTowersByName(TOWER_NAMES.BASIC)
+		if #miracles >= 2 then
+			environment.Stage = 1
+			print("[系统] 已有2个 Miracle")
+		end
+		return
+	end
+
+	if not _G.miraclePhaseComplete then return end
+
+	SpamPlaceOthers()
+end
+
+local flowBusy = false
 local function ProcessFlow()
-    if _G.stopAll then return end
-    if not IsInGame() then return end
-
-    if environment.Stage == 0 then
-        -- 没带 Miracle 就直接跳过 Miracle 阶段, 有什么放什么
-        if dataLoaded and not equippedSet[TOWER_NAMES.BASIC] then
-            _G.miraclePhaseComplete = true
-            environment.Stage = 1
-            print("[系统] 未带 Miracle, 跳过 Miracle 阶段")
-            return
-        end
-
-        ProcessMiracle()
-
-        local miracles = GetTowersByName(TOWER_NAMES.BASIC)
-        if #miracles >= 2 then
-            environment.Stage = 1
-            print("[系统] 已有2个 Miracle")
-        end
-        return
-    end
-
-    if not _G.miraclePhaseComplete then return end
-
-    SpamPlaceOthers()
+	if flowBusy then return end
+	flowBusy = true
+	pcall(ProcessFlowInner)
+	flowBusy = false
 end
 
 Gold.Changed:Connect(ProcessFlow)
 
 task.spawn(function()
-    while task.wait(0.1) do
-        if not _G.stopAll then
-            pcall(ProcessFlow)
-        end
-    end
+	while task.wait(0.1) do
+		if not _G.stopAll then
+			pcall(ProcessFlow)
+		end
+	end
 end)
 
 --========================================================--
--- DOMAIN (King Domain 已完全关闭, 只保留 Gojo Domain)
+-- DOMAIN (Gojo Domain 全图; King Domain 全图, 见下方)
 --========================================================--
 
 task.spawn(function()
-    while task.wait(2) do
-        if not _G.stopAll then
-            pcall(function()
-                local towersFolder = Workspace:FindFirstChild("Towers")
-                if not towersFolder then return end
+	while task.wait(2) do
+		if not _G.stopAll then
+			pcall(function()
+				local towersFolder = Workspace:FindFirstChild("Towers")
+				if not towersFolder then return end
 
-                for _, t in ipairs(towersFolder:GetChildren()) do
-                    if NameMatches(t.Name, TOWER_NAMES.GOJO) then
-                        pcall(function() GojoDomain:FireServer(t) end)
-                        break
-                    end
-                end
-            end)
-        end
-    end
+				for _, t in ipairs(towersFolder:GetChildren()) do
+					if NameMatches(t.Name, TOWER_NAMES.GOJO) then
+						pcall(function() GojoDomain:FireServer(t) end)
+						break
+					end
+				end
+			end)
+		end
+	end
+end)
+
+--========================================================--
+-- KING DOMAIN: 所有地图 (无数字 + 2~7 全试)
+--========================================================--
+
+local function FireAllDomain(baseName, remote)
+	local towers = Workspace:FindFirstChild("Towers")
+	if not towers then return end
+
+	-- 无数字
+	local t = towers:FindFirstChild(baseName)
+	if t then
+		pcall(function() remote:FireServer(t) end)
+	end
+
+	-- 2~7
+	for i = 2, 7 do
+		local ti = towers:FindFirstChild(baseName .. i)
+		if ti then
+			pcall(function() remote:FireServer(ti) end)
+		end
+	end
+end
+
+task.spawn(function()
+	local kingDomain
+	while task.wait(2) do
+		if not _G.stopAll and IsInGame() then
+			pcall(function()
+				if not kingDomain then
+					local towersRemotes = Remotes:FindFirstChild("Towers")
+					local kingFolder = towersRemotes and towersRemotes:FindFirstChild("KingOfCursesEvo")
+					kingDomain = kingFolder and kingFolder:FindFirstChild("DomainActive")
+				end
+				if kingDomain then
+					FireAllDomain(TOWER_NAMES.KING, kingDomain)
+				end
+			end)
+		end
+	end
 end)
 
 --========================================================--
@@ -702,219 +806,248 @@ end)
 local waveTriggered = false
 
 task.spawn(function()
-    while task.wait(0.5) do
-        pcall(function()
-            local info = Workspace:FindFirstChild("Info")
-            if not info then return end
+	while task.wait(0.5) do
+		pcall(function()
+			local info = Workspace:FindFirstChild("Info")
+			if not info then return end
 
-            local wave = info:FindFirstChild("Wave")
-            if not wave then return end
+			local wave = info:FindFirstChild("Wave")
+			if not wave then return end
 
-            if wave.Value >= 50 and not waveTriggered then
-                waveTriggered = true
-                _G.stopAll = true
-                print("[系统] Wave >= 50，停止所有操作并删除塔")
-            end
+			if wave.Value >= 50 and not waveTriggered then
+				waveTriggered = true
+				_G.stopAll = true
+				print("[系统] Wave >= 50，停止所有操作并删除塔")
+			end
 
-            if waveTriggered then
-                local towersFolder = Workspace:FindFirstChild("Towers")
-                if towersFolder then
-                    for _, t in ipairs(towersFolder:GetChildren()) do
-                        pcall(function() SellTower:InvokeServer(t) end)
-                        task.wait(0.01)
-                    end
-                end
-            end
-        end)
-    end
+			if waveTriggered then
+				local towersFolder = Workspace:FindFirstChild("Towers")
+				if towersFolder then
+					for _, t in ipairs(towersFolder:GetChildren()) do
+						pcall(function() SellTower:InvokeServer(t) end)
+						task.wait(0.01)
+					end
+				end
+			end
+		end)
+	end
 end)
 
 --========================================================--
--- UI
+-- UI  (minimal / premium)
 --========================================================--
 
 local COLORS = {
-    bg      = Color3.fromRGB(14, 15, 22),
-    panel   = Color3.fromRGB(22, 24, 34),
-    card    = Color3.fromRGB(28, 31, 44),
-    unit    = Color3.fromRGB(36, 40, 56),
-    line    = Color3.fromRGB(52, 57, 80),
-    text    = Color3.fromRGB(235, 238, 248),
-    sub     = Color3.fromRGB(135, 142, 168),
-    green   = Color3.fromRGB(46, 204, 113),
-    red     = Color3.fromRGB(240, 82, 82),
-    amber   = Color3.fromRGB(245, 184, 55),
-    gray    = Color3.fromRGB(110, 116, 140),
-    accent  = Color3.fromRGB(120, 110, 255),
+	bg      = Color3.fromRGB(11, 11, 15),
+	surface = Color3.fromRGB(18, 18, 24),
+	tile    = Color3.fromRGB(24, 24, 32),
+	line    = Color3.fromRGB(38, 38, 50),
+	text    = Color3.fromRGB(240, 240, 246),
+	sub     = Color3.fromRGB(128, 128, 148),
+	dim     = Color3.fromRGB(82, 82, 100),
+	green   = Color3.fromRGB(52, 211, 153),
+	red     = Color3.fromRGB(248, 113, 113),
+	amber   = Color3.fromRGB(251, 191, 36),
+	gray    = Color3.fromRGB(100, 100, 120),
+	accent  = Color3.fromRGB(139, 128, 255),
 }
 
 local function New(class, props, parent)
-    local obj = Instance.new(class)
-    for k, v in pairs(props) do
-        obj[k] = v
-    end
-    if parent then obj.Parent = parent end
-    return obj
+	local obj = Instance.new(class)
+	for k, v in pairs(props) do
+		obj[k] = v
+	end
+	if parent then obj.Parent = parent end
+	return obj
 end
 
 local function Corner(parent, r)
-    return New("UICorner", { CornerRadius = UDim.new(0, r) }, parent)
+	return New("UICorner", { CornerRadius = UDim.new(0, r) }, parent)
 end
 
 local function Stroke(parent, color, thickness, transparency)
-    return New("UIStroke", {
-        Color = color,
-        Thickness = thickness or 1,
-        Transparency = transparency or 0,
-        ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
-    }, parent)
+	return New("UIStroke", {
+		Color = color,
+		Thickness = thickness or 1,
+		Transparency = transparency or 0,
+		ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+	}, parent)
 end
 
 local function Pad(parent, l, t, r, b)
-    return New("UIPadding", {
-        PaddingLeft = UDim.new(0, l), PaddingTop = UDim.new(0, t),
-        PaddingRight = UDim.new(0, r), PaddingBottom = UDim.new(0, b),
-    }, parent)
+	return New("UIPadding", {
+		PaddingLeft = UDim.new(0, l), PaddingTop = UDim.new(0, t),
+		PaddingRight = UDim.new(0, r), PaddingBottom = UDim.new(0, b),
+	}, parent)
 end
 
 local function Label(parent, text, size, color, font, xalign)
-    return New("TextLabel", {
-        BackgroundTransparency = 1,
-        Text = text,
-        TextSize = size,
-        TextColor3 = color,
-        Font = font or Enum.Font.GothamMedium,
-        TextXAlignment = xalign or Enum.TextXAlignment.Left,
-        TextYAlignment = Enum.TextYAlignment.Center,
-    }, parent)
+	return New("TextLabel", {
+		BackgroundTransparency = 1,
+		Text = text,
+		TextSize = size,
+		TextColor3 = color,
+		Font = font or Enum.Font.GothamMedium,
+		TextXAlignment = xalign or Enum.TextXAlignment.Left,
+		TextYAlignment = Enum.TextYAlignment.Center,
+	}, parent)
 end
 
 local function Tween(obj, props, t)
-    pcall(function()
-        TweenService:Create(obj, TweenInfo.new(t or 0.25, Enum.EasingStyle.Quad), props):Play()
-    end)
+	pcall(function()
+		TweenService:Create(obj, TweenInfo.new(t or 0.25, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), props):Play()
+	end)
 end
 
 local function GetGuiParent()
-    local ok, g = pcall(function() return gethui and gethui() end)
-    if ok and g then return g end
-    ok, g = pcall(function() return game:GetService("CoreGui") end)
-    if ok and g then return g end
-    return LocalPlayer:WaitForChild("PlayerGui")
+	local ok, g = pcall(function() return gethui and gethui() end)
+	if ok and g then return g end
+	ok, g = pcall(function() return game:GetService("CoreGui") end)
+	if ok and g then return g end
+	return LocalPlayer:WaitForChild("PlayerGui")
 end
 
 pcall(function()
-    local old = GetGuiParent():FindFirstChild("TowerControlUI")
-    if old then old:Destroy() end
+	local old = GetGuiParent():FindFirstChild("TowerControlUI")
+	if old then old:Destroy() end
 end)
 
 local Gui = New("ScreenGui", {
-    Name = "TowerControlUI",
-    ResetOnSpawn = false,
-    ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
-    DisplayOrder = 999,
-    IgnoreGuiInset = true,
+	Name = "TowerControlUI",
+	ResetOnSpawn = false,
+	ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+	DisplayOrder = 999,
+	IgnoreGuiInset = true,
 })
 Gui.Parent = GetGuiParent()
 
-local FULL_H = 620
-local Main = New("Frame", {
-    Name = "Main",
-    Size = UDim2.new(0, 440, 0, FULL_H),
-    Position = UDim2.new(0, 24, 0.5, -FULL_H / 2),
-    BackgroundColor3 = COLORS.bg,
-    BorderSizePixel = 0,
-    ClipsDescendants = true,
+--------------------------------------------------------------
+-- Main window
+--------------------------------------------------------------
+local MAIN_W = 480
+local FULL_H = 690
+local HEADER_H = 64
+local STRIP_H = 56
+
+local Main = New("CanvasGroup", {
+	Name = "Main",
+	AnchorPoint = Vector2.new(0.5, 0),
+	Size = UDim2.new(0, MAIN_W, 0, FULL_H),
+	Position = UDim2.new(0, 24 + MAIN_W / 2, 0.5, -FULL_H / 2),
+	BackgroundColor3 = COLORS.bg,
+	BorderSizePixel = 0,
+	ClipsDescendants = true,
+	GroupTransparency = 1,
 }, Gui)
-Corner(Main, 16)
-Stroke(Main, COLORS.line, 1.2, 0.2)
+Corner(Main, 18)
+Stroke(Main, COLORS.line, 1, 0.1)
+local MainScale = New("UIScale", { Scale = 0.95 }, Main)
 
 -- Header ---------------------------------------------------
 local Header = New("Frame", {
-    Size = UDim2.new(1, 0, 0, 62),
-    BackgroundColor3 = COLORS.panel,
-    BorderSizePixel = 0,
+	Size = UDim2.new(1, 0, 0, HEADER_H),
+	BackgroundTransparency = 1,
+	BorderSizePixel = 0,
 }, Main)
-Corner(Header, 16)
--- 盖住 header 下圆角
-New("Frame", {
-    Size = UDim2.new(1, 0, 0, 16),
-    Position = UDim2.new(0, 0, 1, -16),
-    BackgroundColor3 = COLORS.panel,
-    BorderSizePixel = 0,
+
+local Mark = New("Frame", {
+	Size = UDim2.new(0, 32, 0, 32),
+	Position = UDim2.new(0, 18, 0.5, -16),
+	BackgroundColor3 = COLORS.accent,
+	BackgroundTransparency = 0.86,
+	BorderSizePixel = 0,
 }, Header)
+Corner(Mark, 10)
+Stroke(Mark, COLORS.accent, 1, 0.6)
+local MarkText = Label(Mark, "T", 15, COLORS.accent, Enum.Font.GothamBold, Enum.TextXAlignment.Center)
+MarkText.Size = UDim2.new(1, 0, 1, 0)
 
-New("UIGradient", {
-    Color = ColorSequence.new(Color3.fromRGB(30, 28, 60), Color3.fromRGB(20, 22, 34)),
-    Rotation = 20,
-}, Header)
+local Title = Label(Header, "Tower Control", 16, COLORS.text, Enum.Font.GothamBold)
+Title.Size = UDim2.new(0, 200, 0, 20)
+Title.Position = UDim2.new(0, 62, 0, 13)
 
-local AccentDot = New("Frame", {
-    Size = UDim2.new(0, 6, 0, 28),
-    Position = UDim2.new(0, 16, 0.5, -14),
-    BackgroundColor3 = COLORS.accent,
-    BorderSizePixel = 0,
-}, Header)
-Corner(AccentDot, 3)
-
-local Title = Label(Header, "TOWER CONTROL", 17, COLORS.text, Enum.Font.GothamBold)
-Title.Size = UDim2.new(0, 200, 0, 22)
-Title.Position = UDim2.new(0, 32, 0, 12)
-
-local SubTitle = Label(Header, "Equipped Loadout Monitor", 11, COLORS.sub, Enum.Font.Gotham)
-SubTitle.Size = UDim2.new(0, 200, 0, 16)
-SubTitle.Position = UDim2.new(0, 32, 0, 34)
+local SubTitle = Label(Header, "loadout · live monitor", 11, COLORS.sub, Enum.Font.Gotham)
+SubTitle.Size = UDim2.new(0, 200, 0, 14)
+SubTitle.Position = UDim2.new(0, 62, 0, 34)
 
 local MinBtn = New("TextButton", {
-    Size = UDim2.new(0, 30, 0, 30),
-    Position = UDim2.new(1, -44, 0.5, -15),
-    BackgroundColor3 = COLORS.unit,
-    Text = "–",
-    TextColor3 = COLORS.text,
-    TextSize = 18,
-    Font = Enum.Font.GothamBold,
-    AutoButtonColor = true,
+	Size = UDim2.new(0, 28, 0, 28),
+	Position = UDim2.new(1, -46, 0.5, -14),
+	BackgroundColor3 = COLORS.surface,
+	Text = "–",
+	TextColor3 = COLORS.sub,
+	TextSize = 16,
+	Font = Enum.Font.GothamBold,
+	AutoButtonColor = false,
 }, Header)
-Corner(MinBtn, 8)
+Corner(MinBtn, 9)
+local MinStroke = Stroke(MinBtn, COLORS.line, 1, 0.2)
+MinBtn.MouseEnter:Connect(function()
+	Tween(MinBtn, { TextColor3 = COLORS.text }, 0.15)
+	Tween(MinStroke, { Color = COLORS.accent }, 0.15)
+end)
+MinBtn.MouseLeave:Connect(function()
+	Tween(MinBtn, { TextColor3 = COLORS.sub }, 0.15)
+	Tween(MinStroke, { Color = COLORS.line }, 0.15)
+end)
 
-local OverallBadge = Label(Header, "加载中", 12, COLORS.gray, Enum.Font.GothamBold, Enum.TextXAlignment.Center)
-OverallBadge.Size = UDim2.new(0, 92, 0, 26)
-OverallBadge.Position = UDim2.new(1, -150, 0.5, -13)
-OverallBadge.BackgroundTransparency = 0.8
+local OverallBadge = Label(Header, "加载中", 11, COLORS.gray, Enum.Font.GothamBold, Enum.TextXAlignment.Center)
+OverallBadge.AnchorPoint = Vector2.new(1, 0.5)
+OverallBadge.Position = UDim2.new(1, -84, 0.5, 0)
+OverallBadge.Size = UDim2.new(0, 84, 0, 24)
+OverallBadge.BackgroundTransparency = 0.88
 OverallBadge.BackgroundColor3 = COLORS.gray
-Corner(OverallBadge, 13)
-local OverallStroke = Stroke(OverallBadge, COLORS.gray, 1, 0.3)
+Corner(OverallBadge, 12)
 
--- Stats row -------------------------------------------------
-local Stats = New("Frame", {
-    Size = UDim2.new(1, -24, 0, 52),
-    Position = UDim2.new(0, 12, 0, 72),
-    BackgroundTransparency = 1,
+local function HLine(y)
+	return New("Frame", {
+		Size = UDim2.new(1, -36, 0, 1),
+		Position = UDim2.new(0, 18, 0, y),
+		BackgroundColor3 = COLORS.line,
+		BackgroundTransparency = 0.35,
+		BorderSizePixel = 0,
+	}, Main)
+end
+
+HLine(HEADER_H)
+
+-- Metric strip ----------------------------------------------
+local Strip = New("Frame", {
+	Size = UDim2.new(1, -36, 0, STRIP_H),
+	Position = UDim2.new(0, 18, 0, HEADER_H + 1),
+	BackgroundTransparency = 1,
 }, Main)
-New("UIGridLayout", {
-    CellSize = UDim2.new(0.25, -6, 1, 0),
-    CellPadding = UDim2.new(0, 8, 0, 0),
-    SortOrder = Enum.SortOrder.LayoutOrder,
-}, Stats)
+New("UIListLayout", {
+	FillDirection = Enum.FillDirection.Horizontal,
+	SortOrder = Enum.SortOrder.LayoutOrder,
+}, Strip)
 
 local function MakeStat(order, caption)
-    local f = New("Frame", {
-        BackgroundColor3 = COLORS.panel,
-        BorderSizePixel = 0,
-        LayoutOrder = order,
-    }, Stats)
-    Corner(f, 10)
-    Stroke(f, COLORS.line, 1, 0.5)
+	local f = New("Frame", {
+		Size = UDim2.new(0.25, 0, 1, 0),
+		BackgroundTransparency = 1,
+		LayoutOrder = order,
+	}, Strip)
 
-    local cap = Label(f, caption, 10, COLORS.sub, Enum.Font.Gotham, Enum.TextXAlignment.Center)
-    cap.Size = UDim2.new(1, 0, 0, 16)
-    cap.Position = UDim2.new(0, 0, 0, 7)
+	if order > 1 then
+		New("Frame", {
+			Size = UDim2.new(0, 1, 0, 24),
+			Position = UDim2.new(0, 0, 0.5, -12),
+			BackgroundColor3 = COLORS.line,
+			BackgroundTransparency = 0.35,
+			BorderSizePixel = 0,
+		}, f)
+	end
 
-    local val = Label(f, "-", 14, COLORS.text, Enum.Font.GothamBold, Enum.TextXAlignment.Center)
-    val.Size = UDim2.new(1, -8, 0, 20)
-    val.Position = UDim2.new(0, 4, 0, 24)
-    val.TextTruncate = Enum.TextTruncate.AtEnd
-    return val
+	local cap = Label(f, caption, 10, COLORS.sub, Enum.Font.GothamMedium, Enum.TextXAlignment.Left)
+	cap.Size = UDim2.new(1, -14, 0, 14)
+	cap.Position = UDim2.new(0, order > 1 and 14 or 0, 0, 10)
+
+	local val = Label(f, "-", 15, COLORS.text, Enum.Font.GothamBold, Enum.TextXAlignment.Left)
+	val.Size = UDim2.new(1, -14, 0, 20)
+	val.Position = UDim2.new(0, order > 1 and 14 or 0, 0, 26)
+	val.TextTruncate = Enum.TextTruncate.AtEnd
+	return val
 end
 
 local StatMap = MakeStat(1, "MAP")
@@ -922,508 +1055,569 @@ local StatWave = MakeStat(2, "WAVE")
 local StatGold = MakeStat(3, "GOLD")
 local StatState = MakeStat(4, "STATE")
 
+local BODY_Y = HEADER_H + STRIP_H + 2
+HLine(BODY_Y - 1)
+
 -- Scroll ----------------------------------------------------
 local Scroll = New("ScrollingFrame", {
-    Name = "Scroll",
-    Size = UDim2.new(1, -12, 1, -136),
-    Position = UDim2.new(0, 6, 0, 130),
-    BackgroundTransparency = 1,
-    BorderSizePixel = 0,
-    ScrollBarThickness = 4,
-    ScrollBarImageColor3 = COLORS.line,
-    CanvasSize = UDim2.new(0, 0, 0, 0),
-    AutomaticCanvasSize = Enum.AutomaticSize.Y,
-    ScrollingDirection = Enum.ScrollingDirection.Y,
+	Name = "Scroll",
+	Size = UDim2.new(1, 0, 1, -BODY_Y),
+	Position = UDim2.new(0, 0, 0, BODY_Y),
+	BackgroundTransparency = 1,
+	BorderSizePixel = 0,
+	ScrollBarThickness = 3,
+	ScrollBarImageColor3 = COLORS.line,
+	CanvasSize = UDim2.new(0, 0, 0, 0),
+	AutomaticCanvasSize = Enum.AutomaticSize.Y,
+	ScrollingDirection = Enum.ScrollingDirection.Y,
 }, Main)
-Pad(Scroll, 6, 2, 6, 10)
+Pad(Scroll, 16, 14, 16, 16)
 New("UIListLayout", {
-    Padding = UDim.new(0, 10),
-    SortOrder = Enum.SortOrder.LayoutOrder,
+	Padding = UDim.new(0, 12),
+	SortOrder = Enum.SortOrder.LayoutOrder,
 }, Scroll)
 
--- Card factory ----------------------------------------------
-local function MakeCardFrame(order)
-    local card = New("Frame", {
-        Size = UDim2.new(1, 0, 0, 0),
-        AutomaticSize = Enum.AutomaticSize.Y,
-        BackgroundColor3 = COLORS.card,
-        BorderSizePixel = 0,
-        LayoutOrder = order,
-    }, Scroll)
-    Corner(card, 12)
-    local stroke = Stroke(card, COLORS.line, 1.4, 0.2)
-    Pad(card, 12, 10, 12, 12)
-    New("UIListLayout", {
-        Padding = UDim.new(0, 8),
-        SortOrder = Enum.SortOrder.LayoutOrder,
-    }, card)
-    return card, stroke
+--------------------------------------------------------------
+-- Floating toggle button (right side, draggable)
+--------------------------------------------------------------
+local ToggleBtn = New("TextButton", {
+	Name = "ToggleBtn",
+	Size = UDim2.new(0, 46, 0, 46),
+	Position = UDim2.new(1, -72, 0.5, -23),
+	BackgroundColor3 = COLORS.bg,
+	Text = "TC",
+	TextColor3 = COLORS.text,
+	TextSize = 13,
+	Font = Enum.Font.GothamBold,
+	AutoButtonColor = false,
+	ZIndex = 50,
+}, Gui)
+Corner(ToggleBtn, 23)
+local ToggleStroke = Stroke(ToggleBtn, COLORS.accent, 1.5, 0.35)
+
+local OverallDot = New("Frame", {
+	Size = UDim2.new(0, 11, 0, 11),
+	Position = UDim2.new(1, -11, 0, 0),
+	BackgroundColor3 = COLORS.gray,
+	BorderSizePixel = 0,
+	ZIndex = 51,
+}, ToggleBtn)
+Corner(OverallDot, 6)
+Stroke(OverallDot, COLORS.bg, 2, 0)
+
+ToggleBtn.MouseEnter:Connect(function()
+	Tween(ToggleStroke, { Transparency = 0 }, 0.15)
+end)
+ToggleBtn.MouseLeave:Connect(function()
+	Tween(ToggleStroke, { Transparency = 0.35 }, 0.15)
+end)
+
+local uiOpen = true
+local function SetUiVisible(v)
+	uiOpen = v
+	if v then
+		Main.Visible = true
+		Tween(MainScale, { Scale = 1 }, 0.3)
+		Tween(Main, { GroupTransparency = 0 }, 0.25)
+		Tween(ToggleBtn, { BackgroundColor3 = COLORS.bg }, 0.2)
+	else
+		Tween(MainScale, { Scale = 0.95 }, 0.2)
+		Tween(Main, { GroupTransparency = 1 }, 0.2)
+		Tween(ToggleBtn, { BackgroundColor3 = COLORS.surface }, 0.2)
+		task.delay(0.22, function()
+			if not uiOpen then Main.Visible = false end
+		end)
+	end
 end
 
-local function MakeHead(parent, title, order)
-    local head = New("Frame", {
-        Size = UDim2.new(1, 0, 0, 26),
-        BackgroundTransparency = 1,
-        LayoutOrder = order,
-    }, parent)
+do
+	local pressing, moved = false, false
+	local pressPos, btnStart
 
-    local t = Label(head, title, 14, COLORS.text, Enum.Font.GothamBold)
-    t.Size = UDim2.new(0.55, 0, 1, 0)
+	ToggleBtn.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1
+			or input.UserInputType == Enum.UserInputType.Touch then
+			pressing = true
+			moved = false
+			pressPos = input.Position
+			btnStart = ToggleBtn.Position
+			input.Changed:Connect(function()
+				if input.UserInputState == Enum.UserInputState.End then
+					pressing = false
+					if not moved then
+						SetUiVisible(not uiOpen)
+					end
+				end
+			end)
+		end
+	end)
 
-    local badge = Label(head, "-", 11, COLORS.gray, Enum.Font.GothamBold, Enum.TextXAlignment.Center)
-    badge.AnchorPoint = Vector2.new(1, 0.5)
-    badge.Position = UDim2.new(1, 0, 0.5, 0)
-    badge.Size = UDim2.new(0, 108, 0, 22)
-    badge.BackgroundColor3 = COLORS.gray
-    badge.BackgroundTransparency = 0.82
-    Corner(badge, 11)
-    local bstroke = Stroke(badge, COLORS.gray, 1, 0.4)
-
-    return badge, bstroke
+	UserInputService.InputChanged:Connect(function(input)
+		if pressing and (input.UserInputType == Enum.UserInputType.MouseMovement
+			or input.UserInputType == Enum.UserInputType.Touch) then
+			local delta = input.Position - pressPos
+			if delta.Magnitude > 6 then moved = true end
+			if moved then
+				ToggleBtn.Position = UDim2.new(
+					btnStart.X.Scale, btnStart.X.Offset + delta.X,
+					btnStart.Y.Scale, btnStart.Y.Offset + delta.Y
+				)
+			end
+		end
+	end)
 end
 
--- Equipped section ------------------------------------------
-local EquipCard = MakeCardFrame(0)
-local EquipBadge, EquipBadgeStroke = MakeHead(EquipCard, "已识别装备塔", 1)
-
-local EquipGrid = New("Frame", {
-    Size = UDim2.new(1, 0, 0, 0),
-    AutomaticSize = Enum.AutomaticSize.Y,
-    BackgroundTransparency = 1,
-    LayoutOrder = 2,
-}, EquipCard)
-New("UIGridLayout", {
-    CellSize = UDim2.new(0.5, -4, 0, 28),
-    CellPadding = UDim2.new(0, 8, 0, 6),
-    SortOrder = Enum.SortOrder.LayoutOrder,
-}, EquipGrid)
-
-local EquipEmpty = Label(EquipCard, "正在读取已带塔…", 12, COLORS.sub, Enum.Font.Gotham)
-EquipEmpty.Size = UDim2.new(1, 0, 0, 18)
-EquipEmpty.LayoutOrder = 3
-
-local equipSignature = ""
-
+--------------------------------------------------------------
+-- Section cards + tower tiles
+--------------------------------------------------------------
 local DISPLAY_NAME = {
-    [TOWER_NAMES.BASIC] = "Miracle",
-    [TOWER_NAMES.HARVESTER] = "Harvester",
-    [TOWER_NAMES.KING] = "KingOfCurses Evo",
-    [TOWER_NAMES.GOJO] = "StrongestSorcerer Evo",
-    [TOWER_NAMES.TREE] = "TreeOfLife",
-    [TOWER_NAMES.FROST] = "FrostBlossom",
-    [TOWER_NAMES.PINATA] = "Pinata",
-    [TOWER_NAMES.KOGANE] = "Kogane",
-    [TOWER_NAMES.STRONGEST] = "StrongestSorcerer",
-    [TOWER_NAMES.B85] = "KingOfCurses Frost",
+	[TOWER_NAMES.BASIC] = "Miracle",
+	[TOWER_NAMES.HARVESTER] = "Harvester",
+	[TOWER_NAMES.KING] = "KingOfCurses Evo",
+	[TOWER_NAMES.GOJO] = "StrongestSorcerer Evo",
+	[TOWER_NAMES.TREE] = "TreeOfLife",
+	[TOWER_NAMES.FROST] = "FrostBlossom",
+	[TOWER_NAMES.PINATA] = "Pinata",
+	[TOWER_NAMES.KOGANE] = "Kogane",
+	[TOWER_NAMES.CHEAP] = "SorcererAgent",
+	[TOWER_NAMES.STRONGEST] = "StrongestSorcerer",
+	[TOWER_NAMES.B85] = "KingOfCurses Frost",
 }
 
--- 展示顺序
-local EQUIP_ORDER = {
-    "BASIC", "HARVESTER", "KING", "GOJO", "TREE", "FROST", "PINATA", "KOGANE", "STRONGEST", "B85",
-}
-
-local function RebuildEquipChips()
-    local list = {}
-    for _, key in ipairs(EQUIP_ORDER) do
-        local name = TOWER_NAMES[key]
-        if equippedSet[name] then
-            table.insert(list, name)
-        end
-    end
-
-    local sig = table.concat(list, ",") .. (dataLoaded and "|1" or "|0")
-    if sig == equipSignature then return end
-    equipSignature = sig
-
-    for _, c in ipairs(EquipGrid:GetChildren()) do
-        if c:IsA("Frame") then c:Destroy() end
-    end
-
-    for i, name in ipairs(list) do
-        local chip = New("Frame", {
-            BackgroundColor3 = COLORS.unit,
-            BorderSizePixel = 0,
-            LayoutOrder = i,
-        }, EquipGrid)
-        Corner(chip, 8)
-        Stroke(chip, COLORS.green, 1, 0.6)
-
-        local dot = New("Frame", {
-            Size = UDim2.new(0, 6, 0, 6),
-            Position = UDim2.new(0, 8, 0.5, -3),
-            BackgroundColor3 = COLORS.green,
-            BorderSizePixel = 0,
-        }, chip)
-        Corner(dot, 3)
-
-        local l = Label(chip, DISPLAY_NAME[name] or name, 11, COLORS.text, Enum.Font.GothamMedium)
-        l.Position = UDim2.new(0, 22, 0, 0)
-        l.Size = UDim2.new(1, -26, 1, 0)
-        l.TextTruncate = Enum.TextTruncate.AtEnd
-    end
-
-    EquipBadge.Text = dataLoaded and (#list .. " 个") or "加载中"
-    local col = (dataLoaded and #list > 0) and COLORS.accent or COLORS.gray
-    EquipBadge.TextColor3 = col
-    EquipBadge.BackgroundColor3 = col
-    EquipBadgeStroke.Color = col
-
-    if not dataLoaded then
-        EquipEmpty.Text = "正在读取已带塔…"
-        EquipEmpty.Visible = true
-    elseif #list == 0 then
-        EquipEmpty.Text = "按名字没有获取到任何塔"
-        EquipEmpty.Visible = true
-    else
-        EquipEmpty.Visible = false
-    end
-end
-
--- Category cards --------------------------------------------
 local CATEGORY_DEFS = {
-    { id = "starter", title = "STARTER · 起手", units = { "BASIC", "HARVESTER" } },
-    { id = "damage",  title = "DAMAGE · 输出", units = { "KING", "GOJO" } },
-    { id = "farm",    title = "FARM · 经济",   units = { "TREE", "FROST", "PINATA", "KOGANE" } },
-    { id = "support", title = "SUPPORT · 辅助", units = { "STRONGEST", "B85" } },
+	{ id = "starter", title = "STARTER", sub = "起手", units = { "BASIC", "HARVESTER" } },
+	{ id = "damage",  title = "DAMAGE",  sub = "输出", units = { "KING", "GOJO" } },
+	{ id = "farm",    title = "FARM",    sub = "经济", units = { "TREE", "FROST", "PINATA", "KOGANE", "CHEAP" } },
+	{ id = "support", title = "SUPPORT", sub = "辅助", units = { "STRONGEST", "B85" } },
 }
 
 local cards = {}
 
 local function BuildCategoryCard(def, order)
-    local card, stroke = MakeCardFrame(order)
-    local badge, bstroke = MakeHead(card, def.title, 1)
+	local card = New("Frame", {
+		Size = UDim2.new(1, 0, 0, 0),
+		AutomaticSize = Enum.AutomaticSize.Y,
+		BackgroundColor3 = COLORS.surface,
+		BorderSizePixel = 0,
+		LayoutOrder = order,
+	}, Scroll)
+	Corner(card, 14)
+	local stroke = Stroke(card, COLORS.line, 1, 0.25)
+	Pad(card, 14, 12, 14, 14)
+	New("UIListLayout", { Padding = UDim.new(0, 10), SortOrder = Enum.SortOrder.LayoutOrder }, card)
 
-    local msg = Label(card, "", 12, COLORS.sub, Enum.Font.Gotham)
-    msg.Size = UDim2.new(1, 0, 0, 0)
-    msg.AutomaticSize = Enum.AutomaticSize.Y
-    msg.TextWrapped = true
-    msg.TextYAlignment = Enum.TextYAlignment.Top
-    msg.LayoutOrder = 2
+	-- head
+	local head = New("Frame", {
+		Size = UDim2.new(1, 0, 0, 22),
+		BackgroundTransparency = 1,
+		LayoutOrder = 1,
+	}, card)
 
-    local grid = New("Frame", {
-        Size = UDim2.new(1, 0, 0, 0),
-        AutomaticSize = Enum.AutomaticSize.Y,
-        BackgroundTransparency = 1,
-        LayoutOrder = 3,
-    }, card)
-    New("UIGridLayout", {
-        CellSize = UDim2.new(0.5, -4, 0, 54),
-        CellPadding = UDim2.new(0, 8, 0, 8),
-        SortOrder = Enum.SortOrder.LayoutOrder,
-    }, grid)
+	local t = Label(head, def.title, 12, COLORS.text, Enum.Font.GothamBold)
+	t.Size = UDim2.new(0, 70, 1, 0)
 
-    local units = {}
-    for i, key in ipairs(def.units) do
-        local name = TOWER_NAMES[key]
-        local f = New("Frame", {
-            BackgroundColor3 = COLORS.unit,
-            BorderSizePixel = 0,
-            LayoutOrder = i,
-        }, grid)
-        Corner(f, 10)
-        local ustroke = Stroke(f, COLORS.gray, 1, 0.6)
+	local st = Label(head, def.sub, 11, COLORS.dim, Enum.Font.Gotham)
+	st.Position = UDim2.new(0, 68, 0, 0)
+	st.Size = UDim2.new(0, 60, 1, 0)
 
-        local bar = New("Frame", {
-            Size = UDim2.new(0, 4, 1, -16),
-            Position = UDim2.new(0, 8, 0, 8),
-            BackgroundColor3 = COLORS.gray,
-            BorderSizePixel = 0,
-        }, f)
-        Corner(bar, 2)
+	local badge = Label(head, "-", 10, COLORS.gray, Enum.Font.GothamBold, Enum.TextXAlignment.Center)
+	badge.AnchorPoint = Vector2.new(1, 0.5)
+	badge.Position = UDim2.new(1, 0, 0.5, 0)
+	badge.Size = UDim2.new(0, 96, 0, 22)
+	badge.BackgroundColor3 = COLORS.gray
+	badge.BackgroundTransparency = 0.88
+	Corner(badge, 11)
 
-        local nameL = Label(f, DISPLAY_NAME[name] or name, 12, COLORS.text, Enum.Font.GothamBold)
-        nameL.Position = UDim2.new(0, 22, 0, 8)
-        nameL.Size = UDim2.new(1, -28, 0, 18)
-        nameL.TextTruncate = Enum.TextTruncate.AtEnd
+	-- message
+	local msg = Label(card, "", 11, COLORS.sub, Enum.Font.Gotham)
+	msg.Size = UDim2.new(1, 0, 0, 0)
+	msg.AutomaticSize = Enum.AutomaticSize.Y
+	msg.TextWrapped = true
+	msg.TextYAlignment = Enum.TextYAlignment.Top
+	msg.LayoutOrder = 2
 
-        local stateL = Label(f, "-", 11, COLORS.gray, Enum.Font.GothamMedium)
-        stateL.Position = UDim2.new(0, 22, 0, 28)
-        stateL.Size = UDim2.new(1, -28, 0, 16)
-        stateL.TextTruncate = Enum.TextTruncate.AtEnd
+	-- tiles
+	local grid = New("Frame", {
+		Size = UDim2.new(1, 0, 0, 0),
+		AutomaticSize = Enum.AutomaticSize.Y,
+		BackgroundTransparency = 1,
+		LayoutOrder = 3,
+	}, card)
+	New("UIGridLayout", {
+		CellSize = UDim2.new(0.5, -4, 0, 68),
+		CellPadding = UDim2.new(0, 8, 0, 8),
+		SortOrder = Enum.SortOrder.LayoutOrder,
+	}, grid)
 
-        units[key] = { frame = f, stroke = ustroke, bar = bar, state = stateL, name = nameL }
-    end
+	local units = {}
+	for i, key in ipairs(def.units) do
+		local name = TOWER_NAMES[key]
+		local f = New("Frame", {
+			BackgroundColor3 = COLORS.tile,
+			BorderSizePixel = 0,
+			LayoutOrder = i,
+		}, grid)
+		Corner(f, 11)
+		local ustroke = Stroke(f, COLORS.line, 1, 0.5)
 
-    cards[def.id] = {
-        card = card, stroke = stroke, badge = badge, bstroke = bstroke, msg = msg, units = units,
-    }
+		local dot = New("Frame", {
+			Size = UDim2.new(0, 6, 0, 6),
+			Position = UDim2.new(0, 12, 0, 13),
+			BackgroundColor3 = COLORS.gray,
+			BorderSizePixel = 0,
+		}, f)
+		Corner(dot, 3)
+
+		local nameL = Label(f, DISPLAY_NAME[name] or name, 12, COLORS.text, Enum.Font.GothamBold)
+		nameL.Position = UDim2.new(0, 24, 0, 7)
+		nameL.Size = UDim2.new(1, -66, 0, 18)
+		nameL.TextTruncate = Enum.TextTruncate.AtEnd
+
+		local stateL = Label(f, "-", 10, COLORS.gray, Enum.Font.GothamMedium)
+		stateL.Position = UDim2.new(0, 12, 0, 28)
+		stateL.Size = UDim2.new(1, -24, 0, 14)
+		stateL.TextTruncate = Enum.TextTruncate.AtEnd
+
+		local lvL = Label(f, "", 11, COLORS.sub, Enum.Font.GothamMedium)
+		lvL.Position = UDim2.new(0, 12, 0, 45)
+		lvL.Size = UDim2.new(1, -24, 0, 16)
+		lvL.TextTruncate = Enum.TextTruncate.AtEnd
+
+		local countL = Label(f, "", 20, COLORS.text, Enum.Font.GothamBold, Enum.TextXAlignment.Right)
+		countL.AnchorPoint = Vector2.new(1, 0)
+		countL.Position = UDim2.new(1, -12, 0, 6)
+		countL.Size = UDim2.new(0, 44, 0, 24)
+
+		units[key] = {
+			frame = f, stroke = ustroke, dot = dot, state = stateL, name = nameL,
+			count = countL, levels = lvL,
+		}
+	end
+
+	cards[def.id] = { card = card, stroke = stroke, badge = badge, msg = msg, units = units }
 end
 
 for i, def in ipairs(CATEGORY_DEFS) do
-    BuildCategoryCard(def, i)
+	BuildCategoryCard(def, i)
 end
 
 local function SetCard(id, color, badgeText, message)
-    local c = cards[id]
-    c.badge.Text = badgeText
-    Tween(c.badge, { TextColor3 = color, BackgroundColor3 = color })
-    Tween(c.bstroke, { Color = color })
-    Tween(c.stroke, { Color = color })
-    c.msg.Text = message
-    c.msg.TextColor3 = (color == COLORS.gray) and COLORS.sub or color
+	local c = cards[id]
+	c.badge.Text = badgeText
+	Tween(c.badge, { TextColor3 = color, BackgroundColor3 = color })
+	Tween(c.stroke, { Color = (color == COLORS.red or color == COLORS.amber) and color or COLORS.line,
+		Transparency = (color == COLORS.red or color == COLORS.amber) and 0.55 or 0.25 })
+	c.msg.Text = message
+	c.msg.TextColor3 = (color == COLORS.red or color == COLORS.amber) and color or COLORS.sub
 end
 
 local function SetUnit(id, key, color, text)
-    local u = cards[id].units[key]
-    u.state.Text = text
-    Tween(u.state, { TextColor3 = color })
-    Tween(u.bar, { BackgroundColor3 = color })
-    Tween(u.stroke, { Color = color })
+	local u = cards[id].units[key]
+	u.state.Text = text
+	Tween(u.state, { TextColor3 = color })
+	Tween(u.dot, { BackgroundColor3 = color })
+	Tween(u.stroke, { Color = (color == COLORS.red) and color or COLORS.line,
+		Transparency = (color == COLORS.red) and 0.45 or 0.5 })
+end
+
+-- 放置数量 + 等级 --------------------------------------------
+local function GetPlacedInfo(towerName)
+	local list = GetTowersByName(towerName)
+	local levels = {}
+	for _, t in ipairs(list) do
+		table.insert(levels, GetTowerLevel(t))
+	end
+	table.sort(levels)
+	return #list, levels
+end
+
+local function UpdatePlacement()
+	for _, def in ipairs(CATEGORY_DEFS) do
+		for _, key in ipairs(def.units) do
+			local u = cards[def.id].units[key]
+			local towerName = TOWER_NAMES[key]
+			local equipped = (not dataLoaded) or equippedSet[towerName]
+
+			if not equipped then
+				u.count.Text = ""
+				u.levels.Text = ""
+				u.name.TextColor3 = COLORS.dim
+			else
+				u.name.TextColor3 = COLORS.text
+				local n, levels = GetPlacedInfo(towerName)
+				u.count.Text = tostring(n)
+				u.count.TextColor3 = (n > 0) and COLORS.text or COLORS.dim
+
+				if n == 0 then
+					u.levels.Text = "未放置"
+					u.levels.TextColor3 = COLORS.dim
+				else
+					local parts = {}
+					for _, lv in ipairs(levels) do
+						table.insert(parts, "Lv" .. lv)
+					end
+					u.levels.Text = table.concat(parts, "｜")
+					u.levels.TextColor3 = COLORS.accent
+				end
+			end
+		end
+	end
 end
 
 -- Evaluation -------------------------------------------------
 local function Has(key)
-    return equippedSet[TOWER_NAMES[key]] == true
+	return equippedSet[TOWER_NAMES[key]] == true
 end
 
 local function Count(keys)
-    local n = 0
-    for _, k in ipairs(keys) do
-        if Has(k) then n = n + 1 end
-    end
-    return n
+	local n = 0
+	for _, k in ipairs(keys) do
+		if Has(k) then n = n + 1 end
+	end
+	return n
 end
 
 local function Names(keys, only)
-    local out = {}
-    for _, k in ipairs(keys) do
-        if (only == nil) or (Has(k) == only) then
-            table.insert(out, DISPLAY_NAME[TOWER_NAMES[k]] or k)
-        end
-    end
-    return table.concat(out, "、")
+	local out = {}
+	for _, k in ipairs(keys) do
+		if (only == nil) or (Has(k) == only) then
+			table.insert(out, DISPLAY_NAME[TOWER_NAMES[k]] or k)
+		end
+	end
+	return table.concat(out, "、")
+end
+
+local function SetOverall(color, text)
+	OverallBadge.Text = text
+	Tween(OverallBadge, { TextColor3 = color, BackgroundColor3 = color })
+	Tween(OverallDot, { BackgroundColor3 = color })
 end
 
 local function Evaluate()
-    if not dataLoaded then
-        for _, def in ipairs(CATEGORY_DEFS) do
-            SetCard(def.id, COLORS.gray, "加载中", "正在读取塔数据…")
-            for _, k in ipairs(def.units) do
-                SetUnit(def.id, k, COLORS.gray, "等待数据")
-            end
-        end
-        OverallBadge.Text = "加载中"
-        OverallBadge.TextColor3 = COLORS.gray
-        OverallBadge.BackgroundColor3 = COLORS.gray
-        OverallStroke.Color = COLORS.gray
-        return
-    end
+	if not dataLoaded then
+		for _, def in ipairs(CATEGORY_DEFS) do
+			SetCard(def.id, COLORS.gray, "加载中", "正在读取塔数据…")
+			for _, k in ipairs(def.units) do
+				SetUnit(def.id, k, COLORS.gray, "等待数据")
+			end
+		end
+		SetOverall(COLORS.gray, "加载中")
+		return
+	end
 
-    local issues = 0
+	local issues = 0
 
-    -- STARTER ------------------------------------------------
-    local starterKeys = { "BASIC", "HARVESTER" }
-    local starterCount = Count(starterKeys)
+	-- STARTER ------------------------------------------------
+	local starterKeys = { "BASIC", "HARVESTER" }
+	local starterCount = Count(starterKeys)
 
-    if starterCount == 0 then
-        issues = issues + 1
-        SetCard("starter", COLORS.red, "缺少 Starter", "缺少 Starter：至少带 Miracle 或 Harvester 其中一个")
-        for _, k in ipairs(starterKeys) do SetUnit("starter", k, COLORS.red, "需要补") end
-    else
-        local m = (starterCount == 1) and "已带 1 个 Starter · 需要带辅助塔" or "已带 2 个 Starter · 不需要辅助塔"
-        SetCard("starter", COLORS.green, "OK", m)
-        for _, k in ipairs(starterKeys) do
-            if Has(k) then
-                SetUnit("starter", k, COLORS.green, "已带")
-            else
-                SetUnit("starter", k, COLORS.gray, "未带 (可选)")
-            end
-        end
-    end
+	if starterCount == 0 then
+		issues = issues + 1
+		SetCard("starter", COLORS.red, "缺少 Starter", "至少带 Miracle 或 Harvester 其中一个")
+		for _, k in ipairs(starterKeys) do SetUnit("starter", k, COLORS.red, "需要补") end
+	else
+		local m = (starterCount == 1) and "已带 1 个 · 需要搭配辅助塔" or "已带 2 个 · 不需要辅助塔"
+		SetCard("starter", COLORS.green, "OK", m)
+		for _, k in ipairs(starterKeys) do
+			if Has(k) then
+				SetUnit("starter", k, COLORS.green, "已带")
+			else
+				SetUnit("starter", k, COLORS.gray, "未带 · 可选")
+			end
+		end
+	end
 
-    -- DAMAGE -------------------------------------------------
-    local damageKeys = { "KING", "GOJO" }
-    local damageCount = Count(damageKeys)
+	-- DAMAGE -------------------------------------------------
+	local damageKeys = { "KING", "GOJO" }
+	local damageCount = Count(damageKeys)
 
-    if damageCount == 2 then
-        SetCard("damage", COLORS.green, "OK", "两个输出塔都已带齐")
-        for _, k in ipairs(damageKeys) do SetUnit("damage", k, COLORS.green, "已带") end
-    else
-        issues = issues + 1
-        SetCard("damage", COLORS.red, "缺少输出", "必须两个都带，还缺：" .. Names(damageKeys, false))
-        for _, k in ipairs(damageKeys) do
-            if Has(k) then
-                SetUnit("damage", k, COLORS.green, "已带")
-            else
-                SetUnit("damage", k, COLORS.red, "需要补")
-            end
-        end
-    end
+	if damageCount == 2 then
+		SetCard("damage", COLORS.green, "OK", "两个输出塔都已带齐")
+		for _, k in ipairs(damageKeys) do SetUnit("damage", k, COLORS.green, "已带") end
+	else
+		issues = issues + 1
+		SetCard("damage", COLORS.red, "缺少输出", "必须两个都带，还缺：" .. Names(damageKeys, false))
+		for _, k in ipairs(damageKeys) do
+			if Has(k) then
+				SetUnit("damage", k, COLORS.green, "已带")
+			else
+				SetUnit("damage", k, COLORS.red, "需要补")
+			end
+		end
+	end
 
-    -- FARM ---------------------------------------------------
-    local farmKeys = { "TREE", "FROST", "PINATA", "KOGANE" }
-    local farmCount = Count(farmKeys)
+	-- FARM ---------------------------------------------------
+	local farmKeys = { "TREE", "FROST", "PINATA", "KOGANE", "CHEAP" }
+	local farmCount = Count(farmKeys)
 
-    if farmCount == 0 then
-        SetCard("farm", COLORS.amber, "未带农场", "还没有带农场塔，建议带 1 个（只能带一个）")
-        for _, k in ipairs(farmKeys) do SetUnit("farm", k, COLORS.gray, "未带") end
-    elseif farmCount > 1 then
-        issues = issues + 1
-        SetCard("farm", COLORS.red, "带多了", "农场塔只能带一个，带了多余的，请卸下：" .. Names(farmKeys, true))
-        for _, k in ipairs(farmKeys) do
-            if Has(k) then
-                SetUnit("farm", k, COLORS.red, "多余 · 请卸下")
-            else
-                SetUnit("farm", k, COLORS.gray, "未带")
-            end
-        end
-    else
-        local koganeNoKing = Has("KOGANE") and not Has("KING")
-        if koganeNoKing then
-            issues = issues + 1
-            SetCard("farm", COLORS.red, "Kogane 无绑定", "Kogane 需要绑定 KingOfCursesEvo，请补带 KingOfCursesEvo")
-        else
-            local extra = Has("KOGANE") and "已带 Kogane · 已绑定 KingOfCursesEvo" or ("已带农场塔：" .. Names(farmKeys, true))
-            SetCard("farm", COLORS.green, "OK", extra)
-        end
-        for _, k in ipairs(farmKeys) do
-            if Has(k) then
-                if k == "KOGANE" and not Has("KING") then
-                    SetUnit("farm", k, COLORS.red, "缺少 King 绑定")
-                else
-                    SetUnit("farm", k, COLORS.green, "已带")
-                end
-            else
-                SetUnit("farm", k, COLORS.gray, "未带")
-            end
-        end
-    end
+	if farmCount == 0 then
+		issues = issues + 1
+		SetCard("farm", COLORS.red, "缺少农场", "必须带 1 个农场塔（只能带一个）")
+		for _, k in ipairs(farmKeys) do SetUnit("farm", k, COLORS.red, "未带") end
+	elseif farmCount > 1 then
+		issues = issues + 1
+		SetCard("farm", COLORS.red, "带多了", "农场塔只能带一个，请卸下多余的：" .. Names(farmKeys, true))
+		for _, k in ipairs(farmKeys) do
+			if Has(k) then
+				SetUnit("farm", k, COLORS.red, "多余 · 请卸下")
+			else
+				SetUnit("farm", k, COLORS.gray, "未带")
+			end
+		end
+	else
+		if Has("KOGANE") and not Has("KING") then
+			issues = issues + 1
+			SetCard("farm", COLORS.red, "Kogane 无绑定", "Kogane 需要绑定 KingOfCursesEvo，请补带")
+		else
+			local extra = Has("KOGANE") and "已带 Kogane · 已绑定 KingOfCursesEvo" or ("已带：" .. Names(farmKeys, true))
+			SetCard("farm", COLORS.green, "OK", extra)
+		end
+		for _, k in ipairs(farmKeys) do
+			if Has(k) then
+				if k == "KOGANE" and not Has("KING") then
+					SetUnit("farm", k, COLORS.red, "缺少 King 绑定")
+				else
+					SetUnit("farm", k, COLORS.green, "已带")
+				end
+			else
+				SetUnit("farm", k, COLORS.gray, "未带")
+			end
+		end
+	end
 
-    -- SUPPORT ------------------------------------------------
-    local supportKeys = { "STRONGEST", "B85" }
-    local supportCount = Count(supportKeys)
+	-- SUPPORT ------------------------------------------------
+	local supportKeys = { "STRONGEST", "B85" }
+	local supportCount = Count(supportKeys)
 
-    if starterCount == 0 then
-        SetCard("support", COLORS.gray, "待定", "先补齐 Starter，再判断是否需要辅助塔")
-        for _, k in ipairs(supportKeys) do
-            SetUnit("support", k, Has(k) and COLORS.green or COLORS.gray, Has(k) and "已带" or "未带")
-        end
-    elseif starterCount == 1 then
-        if supportCount >= 1 then
-            SetCard("support", COLORS.green, "OK", "只带了 1 个 Starter · 辅助塔已带：" .. Names(supportKeys, true))
-            for _, k in ipairs(supportKeys) do
-                SetUnit("support", k, Has(k) and COLORS.green or COLORS.gray, Has(k) and "已带" or "未带")
-            end
-        else
-            issues = issues + 1
-            SetCard("support", COLORS.red, "缺少辅助", "只带了 1 个 Starter，需要补一个辅助塔")
-            for _, k in ipairs(supportKeys) do SetUnit("support", k, COLORS.red, "需要补") end
-        end
-    else
-        if supportCount >= 1 then
-            SetCard("support", COLORS.amber, "无需辅助", "已带 2 个 Starter，不需要辅助塔，可卸下：" .. Names(supportKeys, true))
-            for _, k in ipairs(supportKeys) do
-                SetUnit("support", k, Has(k) and COLORS.amber or COLORS.gray, Has(k) and "不需要 · 可卸下" or "未带")
-            end
-        else
-            SetCard("support", COLORS.green, "OK", "已带 2 个 Starter，不需要辅助塔")
-            for _, k in ipairs(supportKeys) do SetUnit("support", k, COLORS.gray, "无需") end
-        end
-    end
+	if starterCount == 0 then
+		SetCard("support", COLORS.gray, "待定", "先补齐 Starter，再判断是否需要辅助塔")
+		for _, k in ipairs(supportKeys) do
+			SetUnit("support", k, Has(k) and COLORS.green or COLORS.gray, Has(k) and "已带" or "未带")
+		end
+	elseif starterCount == 1 then
+		if supportCount >= 1 then
+			SetCard("support", COLORS.green, "OK", "只带 1 个 Starter · 辅助已带：" .. Names(supportKeys, true))
+			for _, k in ipairs(supportKeys) do
+				SetUnit("support", k, Has(k) and COLORS.green or COLORS.gray, Has(k) and "已带" or "未带")
+			end
+		else
+			issues = issues + 1
+			SetCard("support", COLORS.red, "缺少辅助", "只带了 1 个 Starter，需要补一个辅助塔")
+			for _, k in ipairs(supportKeys) do SetUnit("support", k, COLORS.red, "需要补") end
+		end
+	else
+		if supportCount >= 1 then
+			SetCard("support", COLORS.amber, "无需辅助", "已带 2 个 Starter，可卸下：" .. Names(supportKeys, true))
+			for _, k in ipairs(supportKeys) do
+				SetUnit("support", k, Has(k) and COLORS.amber or COLORS.gray, Has(k) and "不需要 · 可卸下" or "未带")
+			end
+		else
+			SetCard("support", COLORS.green, "OK", "已带 2 个 Starter，不需要辅助塔")
+			for _, k in ipairs(supportKeys) do SetUnit("support", k, COLORS.gray, "无需") end
+		end
+	end
 
-    -- Overall ------------------------------------------------
-    local col, txt
-    if issues == 0 then
-        col, txt = COLORS.green, "配置正常"
-    else
-        col, txt = COLORS.red, issues .. " 项问题"
-    end
-    OverallBadge.Text = txt
-    Tween(OverallBadge, { TextColor3 = col, BackgroundColor3 = col })
-    Tween(OverallStroke, { Color = col })
+	-- Overall ------------------------------------------------
+	if issues == 0 then
+		SetOverall(COLORS.green, "配置正常")
+	else
+		SetOverall(COLORS.red, issues .. " 项问题")
+	end
 end
 
 -- Live stats -------------------------------------------------
 local function FormatNumber(n)
-    n = tonumber(n) or 0
-    local s = tostring(math.floor(n))
-    local formatted = s:reverse():gsub("(%d%d%d)", "%1,"):reverse()
-    return (formatted:gsub("^,", ""))
+	n = tonumber(n) or 0
+	local s = tostring(math.floor(n))
+	local formatted = s:reverse():gsub("(%d%d%d)", "%1,"):reverse()
+	return (formatted:gsub("^,", ""))
 end
 
 local function UpdateStats()
-    StatMap.Text = DetectMap() or "Lobby"
+	StatMap.Text = DetectMap() or "Lobby"
 
-    local wave = "-"
-    pcall(function()
-        local info = Workspace:FindFirstChild("Info")
-        local w = info and info:FindFirstChild("Wave")
-        if w then wave = tostring(w.Value) end
-    end)
-    StatWave.Text = wave
+	local wave = "-"
+	pcall(function()
+		local info = Workspace:FindFirstChild("Info")
+		local w = info and info:FindFirstChild("Wave")
+		if w then wave = tostring(w.Value) end
+	end)
+	StatWave.Text = wave
 
-    pcall(function() StatGold.Text = FormatNumber(Gold.Value) end)
+	pcall(function() StatGold.Text = FormatNumber(Gold.Value) end)
 
-    local stateText, stateColor
-    if _G.stopAll then
-        stateText, stateColor = "STOPPED", COLORS.red
-    elseif not IsInGame() then
-        stateText, stateColor = "IDLE", COLORS.gray
-    elseif not _G.miraclePhaseComplete then
-        stateText, stateColor = "MIRACLE", COLORS.amber
-    else
-        stateText, stateColor = "PLACING", COLORS.green
-    end
-    StatState.Text = stateText
-    StatState.TextColor3 = stateColor
+	local stateText, stateColor
+	if _G.stopAll then
+		stateText, stateColor = "STOPPED", COLORS.red
+	elseif not IsInGame() then
+		stateText, stateColor = "IDLE", COLORS.gray
+	elseif not _G.miraclePhaseComplete then
+		stateText, stateColor = "MIRACLE", COLORS.amber
+	else
+		stateText, stateColor = "PLACING", COLORS.green
+	end
+	StatState.Text = stateText
+	StatState.TextColor3 = stateColor
 end
 
 task.spawn(function()
-    while task.wait(0.5) do
-        pcall(UpdateStats)
-        pcall(RebuildEquipChips)
-        pcall(Evaluate)
-    end
+	while task.wait(0.5) do
+		pcall(UpdateStats)
+		pcall(Evaluate)
+		pcall(UpdatePlacement)
+	end
 end)
 
 pcall(UpdateStats)
-pcall(RebuildEquipChips)
 pcall(Evaluate)
+pcall(UpdatePlacement)
 
--- Minimize / drag / toggle -----------------------------------
+-- Minimize / drag ---------------------------------------------
 local minimized = false
 MinBtn.MouseButton1Click:Connect(function()
-    minimized = not minimized
-    MinBtn.Text = minimized and "+" or "–"
-    Scroll.Visible = not minimized
-    Stats.Visible = not minimized
-    Tween(Main, { Size = UDim2.new(0, 440, 0, minimized and 62 or FULL_H) }, 0.25)
+	minimized = not minimized
+	MinBtn.Text = minimized and "+" or "–"
+	Scroll.Visible = not minimized
+	Strip.Visible = not minimized
+	Tween(Main, { Size = UDim2.new(0, MAIN_W, 0, minimized and HEADER_H or FULL_H) }, 0.3)
 end)
 
 do
-    local dragging, dragStart, startPos
-    Header.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1
-            or input.UserInputType == Enum.UserInputType.Touch then
-            dragging = true
-            dragStart = input.Position
-            startPos = Main.Position
-            input.Changed:Connect(function()
-                if input.UserInputState == Enum.UserInputState.End then
-                    dragging = false
-                end
-            end)
-        end
-    end)
+	local dragging, dragStart, startPos
+	Header.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1
+			or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = true
+			dragStart = input.Position
+			startPos = Main.Position
+			input.Changed:Connect(function()
+				if input.UserInputState == Enum.UserInputState.End then
+					dragging = false
+				end
+			end)
+		end
+	end)
 
-    UserInputService.InputChanged:Connect(function(input)
-        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
-            or input.UserInputType == Enum.UserInputType.Touch) then
-            local delta = input.Position - dragStart
-            Main.Position = UDim2.new(
-                startPos.X.Scale, startPos.X.Offset + delta.X,
-                startPos.Y.Scale, startPos.Y.Offset + delta.Y
-            )
-        end
-    end)
+	UserInputService.InputChanged:Connect(function(input)
+		if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
+			or input.UserInputType == Enum.UserInputType.Touch) then
+			local delta = input.Position - dragStart
+			Main.Position = UDim2.new(
+				startPos.X.Scale, startPos.X.Offset + delta.X,
+				startPos.Y.Scale, startPos.Y.Offset + delta.Y
+			)
+		end
+	end)
 end
 
 UserInputService.InputBegan:Connect(function(input, processed)
-    if processed then return end
-    if input.KeyCode == Enum.KeyCode.RightControl then
-        Gui.Enabled = not Gui.Enabled
-    end
+	if processed then return end
+	if input.KeyCode == Enum.KeyCode.RightControl then
+		SetUiVisible(not uiOpen)
+	end
 end)
+
+SetUiVisible(true)
 
 --========================================================--
 -- FINAL
@@ -1432,6 +1626,6 @@ end)
 print("========================================")
 print("[MAX PERFORMANCE] ENABLED")
 print("[SYSTEM] Tower Control Started")
-print("[SYSTEM] King Domain DISABLED")
-print("[UI] RightControl 显示/隐藏")
+print("[SYSTEM] King Domain: all maps")
+print("[UI] 右侧小按钮(可拖动)/RightControl 显示隐藏")
 print("========================================")
