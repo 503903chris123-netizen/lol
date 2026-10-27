@@ -7,6 +7,8 @@
 --     每个塔一个小卡片: 显示放置数量 + 每个等级 (例: x2 · Lv3｜Lv4)
 --     右侧可拖动小按钮 / RightControl 显示/隐藏 UI
 
+-- 大厅: 没检测到地图 = Lobby, UI 显示传送器卡片 (PlayerCount), 自动 TP 进空传送器并开始
+
 -- 分类规则:
 --  Starter : Miracle / Harvester  -> 带1个或2个都行, 带1个要带辅助, 带2个不需要辅助
 --  Damage  : KingOfCursesEvo + StrongestSorcererEvo 必须都带
@@ -16,10 +18,12 @@
 
 local environment = getgenv()
 
-if environment.ScriptInitialized then
+-- 用 JobId 判断是否已在当前服务器运行: 传送到新服务器 (大厅 <-> 局内) 后 getgenv 里的旧标记不会挡住重新运行
+if environment.ScriptInitializedJob == game.JobId then
 	return
 end
 
+environment.ScriptInitializedJob = game.JobId
 environment.ScriptInitialized = true
 environment.Stage = 0
 environment.HasTriggeredAutoSkip = false
@@ -44,19 +48,42 @@ local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
 
 local LocalPlayer = Players.LocalPlayer
-local Gold = LocalPlayer:WaitForChild("Gold")
+-- 局内 / 局外的对象各不相同, 不能在开头 WaitForChild (会卡死整个脚本).
+-- Lazy: 每次使用时才去找, 找不到就报错 (调用处都包在 pcall 里, 所以只是这一次不执行).
+local function Lazy(root, ...)
+	local path = { ... }
+	return setmetatable({}, {
+		__index = function(_, key)
+			local o = root
+			for _, n in ipairs(path) do
+				o = o and o:FindFirstChild(n)
+			end
+			if not o then
+				error("missing: " .. table.concat(path, "."), 0)
+			end
+			local v = o[key]
+			if type(v) == "function" then
+				return function(_, ...) return v(o, ...) end
+			end
+			return v
+		end,
+	})
+end
 
-local Functions = ReplicatedStorage:WaitForChild("Functions")
-local Remotes = ReplicatedStorage:WaitForChild("Remotes")
+-- Remotes 文件夹局内局外都有 (大厅的 GauntletTeleporters / 局内的 AutoSkip 等), 最多等 10 秒
+local Remotes = ReplicatedStorage:WaitForChild("Remotes", 10) or ReplicatedStorage
 
-local SpawnNewTower = Functions:WaitForChild("SpawnNewTower")
-local UpgradeTower = Functions:WaitForChild("UpgradeTower")
-local SellTower = Functions:WaitForChild("SellTower")
-local ChangeTowerMode = Functions:WaitForChild("ChangeTowerMode")
+local Gold = Lazy(LocalPlayer, "Gold")
 
-local AutoSkip = Remotes:WaitForChild("AutoSkip")
-local GetAllData = Remotes:WaitForChild("GetAllData")
-local GojoDomain = Remotes:WaitForChild("GojoDomain")
+-- 局内才有
+local SpawnNewTower = Lazy(ReplicatedStorage, "Functions", "SpawnNewTower")
+local UpgradeTower = Lazy(ReplicatedStorage, "Functions", "UpgradeTower")
+local SellTower = Lazy(ReplicatedStorage, "Functions", "SellTower")
+local ChangeTowerMode = Lazy(ReplicatedStorage, "Functions", "ChangeTowerMode")
+
+local AutoSkip = Lazy(ReplicatedStorage, "Remotes", "AutoSkip")
+local GetAllData = Lazy(ReplicatedStorage, "Remotes", "GetAllData")
+local GojoDomain = Lazy(ReplicatedStorage, "Remotes", "GojoDomain")
 
 --========================================================--
 -- MAX PERFORMANCE
@@ -726,7 +753,14 @@ local function ProcessFlow()
 	flowBusy = false
 end
 
-Gold.Changed:Connect(ProcessFlow)
+task.spawn(function()
+	local g = LocalPlayer:FindFirstChild("Gold")
+	while not g do
+		task.wait(1)
+		g = LocalPlayer:FindFirstChild("Gold")
+	end
+	g.Changed:Connect(ProcessFlow)
+end)
 
 task.spawn(function()
 	while task.wait(0.1) do
@@ -832,6 +866,251 @@ task.spawn(function()
 		end)
 	end
 end)
+
+--========================================================--
+-- END SCREEN: 局内结算界面出现 (EndScreen.Visible = true) -> 调用 Events.ExitGame
+--  全程 FindFirstChild, 找不到对象就当没出现, 不影响其他功能
+--========================================================--
+
+local function IsEndScreenVisible()
+	local pg = LocalPlayer:FindFirstChild("PlayerGui")
+	local gg = pg and pg:FindFirstChild("GameGui")
+	local es = gg and gg:FindFirstChild("EndScreen")
+	if not es then return false end
+
+	local ok, v = pcall(function()
+		if es:IsA("LayerCollector") then return es.Enabled end
+		return es.Visible
+	end)
+	return ok and v == true
+end
+
+local function CallExitGame()
+	local events = ReplicatedStorage:FindFirstChild("Events")
+	local remote = events and events:FindFirstChild("ExitGame")
+	if not remote then return false end
+
+	pcall(function()
+		if remote:IsA("RemoteFunction") then
+			remote:InvokeServer()
+		else
+			remote:FireServer()
+		end
+	end)
+	return true
+end
+
+task.spawn(function()
+	local lastFire = 0
+	while task.wait(0.2) do
+		if IsInGame() and IsEndScreenVisible() then
+			-- 结算界面还在就每秒再发一次, 直到离开 (不受 Wave 50 停止影响)
+			if tick() - lastFire > 1 then
+				lastFire = tick()
+				print("[系统] 结算界面出现, 调用 ExitGame")
+				task.spawn(CallExitGame)
+			end
+		else
+			lastFire = 0
+		end
+	end
+end)
+
+-- workspace.Info.Time.Timer.Value -> "m:ss" (数字) 或原样文字
+local function GetTimerText()
+	local info = Workspace:FindFirstChild("Info")
+	local t = info and info:FindFirstChild("Time")
+	local timer = t and t:FindFirstChild("Timer")
+	if not timer then return "-" end
+
+	local ok, v = pcall(function() return timer.Value end)
+	if not ok or v == nil then return "-" end
+
+	if type(v) == "number" then
+		local total = math.max(0, math.floor(v))
+		return string.format("%d:%02d", math.floor(total / 60), total % 60)
+	end
+	return tostring(v)
+end
+
+--========================================================--
+-- LOBBY: 自动检测局内 / 局外
+--  局内 (检测到 Workspace.Map 里的地图): 放塔、升级 (上面的逻辑)
+--  局外 (没有检测到地图): 找 PlayerCount 为 0/N 的空传送器 -> 瞬间 TP 进去
+--        -> 绕圈 tween 让传送器检测到 -> 循环 ChooseStage + Start
+--========================================================--
+
+local LOBBY_TP_OFFSET = Vector3.new(0, 3, 0)  -- 传送到传送器中心上方的偏移, 站位不对就改这里
+local CIRCLE_RADIUS = 3                        -- 绕圈半径
+local CIRCLE_STEPS = 12                        -- 绕一圈的段数
+local CIRCLE_STEP_TIME = 0.08                  -- 每段 tween 时间
+local JOIN_TIMEOUT = 6                         -- 进了这么久还在大厅就重新传送 / 换传送器
+
+local LobbyState = { status = "等待中", target = nil, joinedAt = 0 }
+
+-- 传送器按名字里的数字排序 (Elevator2 在 Elevator10 前面)
+local function GetElevators()
+	local folder = Workspace:FindFirstChild("Gauntletteleporters")
+	if not folder then return {} end
+
+	local list = folder:GetChildren()
+	table.sort(list, function(a, b)
+		local na = tonumber(string.match(a.Name, "%d+")) or 0
+		local nb = tonumber(string.match(b.Name, "%d+")) or 0
+		if na ~= nb then return na < nb end
+		return a.Name < b.Name
+	end)
+	return list
+end
+
+-- Billboard.BillboardGui.PlayerCount.Text (找不到就在子孙里按名字找)
+local function GetCountText(elev)
+	local label
+	pcall(function() label = elev.Billboard.BillboardGui.PlayerCount end)
+	if not label then
+		label = elev:FindFirstChild("PlayerCount", true)
+	end
+	if not label then return nil end
+
+	local ok, text = pcall(function() return label.Text end)
+	if ok and type(text) == "string" then
+		return (text:gsub("<[^>]+>", ""))  -- 去掉富文本标签
+	end
+	return nil
+end
+
+-- "0/4" = 空
+local function IsEmptyText(text)
+	if not text then return false end
+	return string.match(text, "^%s*0%s*/%s*%d+") ~= nil
+end
+
+local function GetRoot()
+	local char = LocalPlayer.Character
+	return char and char:FindFirstChild("HumanoidRootPart")
+end
+
+-- 瞬间 TP 到传送器, 然后绕圈 tween 让传送器检测到玩家进入
+local function TeleportInto(elev)
+	local root = GetRoot()
+	if not root then return false end
+
+	local okPivot, pivot = pcall(function() return elev:GetPivot() end)
+	if not okPivot or not pivot then return false end
+
+	local center = pivot.Position + LOBBY_TP_OFFSET
+	pcall(function() root.CFrame = CFrame.new(center) end)
+
+	for i = 1, CIRCLE_STEPS do
+		if IsInGame() then return true end
+		root = GetRoot()
+		if not root then return false end
+
+		local ang = (i / CIRCLE_STEPS) * math.pi * 2
+		local pos = center + Vector3.new(math.cos(ang) * CIRCLE_RADIUS, 0, math.sin(ang) * CIRCLE_RADIUS)
+		local ok = pcall(function()
+			local tw = TweenService:Create(root, TweenInfo.new(CIRCLE_STEP_TIME, Enum.EasingStyle.Linear), {
+				CFrame = CFrame.new(pos),
+			})
+			tw:Play()
+			tw.Completed:Wait()
+		end)
+		if not ok then return false end
+	end
+
+	root = GetRoot()
+	if root then
+		pcall(function() root.CFrame = CFrame.new(center) end)
+	end
+	return true
+end
+
+-- 每局重置状态 (Wave 50 停止后回到大厅, 下一局要重新开始放塔)
+local function ResetRunState()
+	waveTriggered = false
+	_G.stopAll = false
+	_G.miraclePhaseComplete = false
+	_G.autoSkipCalled = false
+	_G.upgradeBlocked = false
+	environment.Stage = 0
+end
+
+local function LobbyStep()
+	local gauntlet = Remotes:FindFirstChild("GauntletTeleporters")
+	local choose = gauntlet and gauntlet:FindFirstChild("ChooseStage")
+	local start = gauntlet and gauntlet:FindFirstChild("Start")
+	if not (choose and start) then
+		LobbyState.status = "找不到 GauntletTeleporters 远程"
+		return
+	end
+
+	local elevators = GetElevators()
+	if #elevators == 0 then
+		LobbyState.status = "等待传送器加载"
+		return
+	end
+
+	local target = LobbyState.target
+	local needPick = (not target) or (not target.Parent)
+	local timedOut = target and target.Parent and (tick() - LobbyState.joinedAt > JOIN_TIMEOUT)
+
+	if needPick or timedOut then
+		local pick
+		for _, e in ipairs(elevators) do
+			if IsEmptyText(GetCountText(e)) then
+				pick = e
+				break
+			end
+		end
+
+		-- 超时且没有别的空传送器: 继续用当前这个, 重新 TP 一次
+		if not pick and timedOut then
+			pick = target
+		end
+
+		if not pick then
+			LobbyState.target = nil
+			LobbyState.status = "没有空传送器, 等待中"
+			return
+		end
+
+		LobbyState.target = pick
+		LobbyState.joinedAt = tick()
+		LobbyState.status = "传送到 " .. pick.Name
+		if not TeleportInto(pick) then
+			LobbyState.target = nil
+			return
+		end
+	end
+
+	target = LobbyState.target
+	if not target then return end
+
+	LobbyState.status = "进入 " .. target.Name .. " · 开始游戏"
+	pcall(function() choose:FireServer(target, true) end)
+	pcall(function() start:FireServer(target) end)
+end
+
+task.spawn(function()
+	local wasInGame = nil
+	while task.wait(0.1) do
+		local inGame = IsInGame()
+
+		if inGame ~= wasInGame then
+			wasInGame = inGame
+			ResetRunState()
+			LobbyState.target = nil
+			LobbyState.status = inGame and "游戏中" or "大厅"
+		end
+
+		if not inGame then
+			pcall(LobbyStep)
+		end
+	end
+end)
+
+-- UI 单独包一层 pcall: UI 出任何问题 (对象缺失等) 都不影响上面的放塔 / 升级 / 大厅逻辑
+local uiOk, uiErr = pcall(function()
 
 --========================================================--
 -- UI  (minimal / premium)
@@ -1022,9 +1301,9 @@ New("UIListLayout", {
 	SortOrder = Enum.SortOrder.LayoutOrder,
 }, Strip)
 
-local function MakeStat(order, caption)
+local function MakeStat(order, caption, width)
 	local f = New("Frame", {
-		Size = UDim2.new(0.25, 0, 1, 0),
+		Size = UDim2.new(width, 0, 1, 0),
 		BackgroundTransparency = 1,
 		LayoutOrder = order,
 	}, Strip)
@@ -1046,14 +1325,16 @@ local function MakeStat(order, caption)
 	local val = Label(f, "-", 15, COLORS.text, Enum.Font.GothamBold, Enum.TextXAlignment.Left)
 	val.Size = UDim2.new(1, -14, 0, 20)
 	val.Position = UDim2.new(0, order > 1 and 14 or 0, 0, 26)
+	val.TextSize = 14
 	val.TextTruncate = Enum.TextTruncate.AtEnd
 	return val
 end
 
-local StatMap = MakeStat(1, "MAP")
-local StatWave = MakeStat(2, "WAVE")
-local StatGold = MakeStat(3, "GOLD")
-local StatState = MakeStat(4, "STATE")
+local StatMap = MakeStat(1, "MAP", 0.26)
+local StatWave = MakeStat(2, "WAVE", 0.12)
+local StatTimer = MakeStat(3, "TIME", 0.18)
+local StatGold = MakeStat(4, "GOLD", 0.22)
+local StatState = MakeStat(5, "STATE", 0.22)
 
 local BODY_Y = HEADER_H + STRIP_H + 2
 HLine(BODY_Y - 1)
@@ -1301,6 +1582,125 @@ for i, def in ipairs(CATEGORY_DEFS) do
 	BuildCategoryCard(def, i)
 end
 
+-- Lobby view: 没检测到地图时显示, 每个传送器一张卡片 ----------------
+local LobbyList = New("Frame", {
+	Name = "LobbyList",
+	Size = UDim2.new(1, 0, 0, 0),
+	AutomaticSize = Enum.AutomaticSize.Y,
+	BackgroundTransparency = 1,
+	LayoutOrder = 0,
+	Visible = false,
+}, Scroll)
+New("UIListLayout", { Padding = UDim.new(0, 12), SortOrder = Enum.SortOrder.LayoutOrder }, LobbyList)
+
+local LobbyHead = New("Frame", {
+	Size = UDim2.new(1, 0, 0, 22),
+	BackgroundTransparency = 1,
+	LayoutOrder = 0,
+}, LobbyList)
+local LobbyTitle = Label(LobbyHead, "LOBBY", 12, COLORS.text, Enum.Font.GothamBold)
+LobbyTitle.Size = UDim2.new(0, 60, 1, 0)
+local LobbySub = Label(LobbyHead, "传送器", 11, COLORS.dim, Enum.Font.Gotham)
+LobbySub.Position = UDim2.new(0, 58, 0, 0)
+LobbySub.Size = UDim2.new(0, 60, 1, 0)
+local LobbyStatus = Label(LobbyHead, "", 11, COLORS.sub, Enum.Font.GothamMedium, Enum.TextXAlignment.Right)
+LobbyStatus.AnchorPoint = Vector2.new(1, 0)
+LobbyStatus.Position = UDim2.new(1, 0, 0, 0)
+LobbyStatus.Size = UDim2.new(1, -120, 1, 0)
+LobbyStatus.TextTruncate = Enum.TextTruncate.AtEnd
+
+local lobbyCards = {}
+local lobbySig = ""
+
+local function RebuildLobbyCards(elevators)
+	for _, c in ipairs(lobbyCards) do
+		c.frame:Destroy()
+	end
+	lobbyCards = {}
+
+	for i, elev in ipairs(elevators) do
+		local f = New("Frame", {
+			Size = UDim2.new(1, 0, 0, 64),
+			BackgroundColor3 = COLORS.surface,
+			BorderSizePixel = 0,
+			LayoutOrder = i,
+		}, LobbyList)
+		Corner(f, 14)
+		local stroke = Stroke(f, COLORS.line, 1, 0.25)
+
+		local dot = New("Frame", {
+			Size = UDim2.new(0, 6, 0, 6),
+			Position = UDim2.new(0, 16, 0, 17),
+			BackgroundColor3 = COLORS.gray,
+			BorderSizePixel = 0,
+		}, f)
+		Corner(dot, 3)
+
+		local nameL = Label(f, elev.Name, 13, COLORS.text, Enum.Font.GothamBold)
+		nameL.Position = UDim2.new(0, 28, 0, 10)
+		nameL.Size = UDim2.new(1, -140, 0, 18)
+		nameL.TextTruncate = Enum.TextTruncate.AtEnd
+
+		local stateL = Label(f, "-", 11, COLORS.gray, Enum.Font.GothamMedium)
+		stateL.Position = UDim2.new(0, 16, 0, 36)
+		stateL.Size = UDim2.new(1, -140, 0, 16)
+		stateL.TextTruncate = Enum.TextTruncate.AtEnd
+
+		local countL = Label(f, "-", 22, COLORS.text, Enum.Font.GothamBold, Enum.TextXAlignment.Right)
+		countL.AnchorPoint = Vector2.new(1, 0.5)
+		countL.Position = UDim2.new(1, -16, 0.5, 0)
+		countL.Size = UDim2.new(0, 110, 0, 30)
+
+		table.insert(lobbyCards, {
+			elev = elev, frame = f, stroke = stroke, dot = dot, state = stateL, count = countL,
+		})
+	end
+end
+
+local function UpdateLobbyView()
+	local inGame = IsInGame()
+	LobbyList.Visible = not inGame
+	for _, def in ipairs(CATEGORY_DEFS) do
+		cards[def.id].card.Visible = inGame
+	end
+	if inGame then return end
+
+	LobbyStatus.Text = LobbyState.status or ""
+
+	local elevators = GetElevators()
+	local names = {}
+	for _, e in ipairs(elevators) do table.insert(names, e.Name) end
+	local sig = table.concat(names, ",")
+	if sig ~= lobbySig then
+		lobbySig = sig
+		RebuildLobbyCards(elevators)
+	end
+
+	for _, c in ipairs(lobbyCards) do
+		local text = GetCountText(c.elev)
+		local empty = IsEmptyText(text)
+		local isTarget = (LobbyState.target == c.elev)
+
+		c.count.Text = text or "-"
+
+		local color, label
+		if isTarget then
+			color, label = COLORS.accent, "已选择 · 进入中"
+		elseif empty then
+			color, label = COLORS.green, "空 · 可进入"
+		else
+			color, label = COLORS.gray, "有人"
+		end
+
+		c.state.Text = label
+		c.state.TextColor3 = color
+		c.count.TextColor3 = empty and COLORS.green or COLORS.text
+		Tween(c.dot, { BackgroundColor3 = color })
+		Tween(c.stroke, { Color = isTarget and COLORS.accent or COLORS.line,
+			Transparency = isTarget and 0.4 or 0.25 })
+	end
+end
+
 local function SetCard(id, color, badgeText, message)
 	local c = cards[id]
 	c.badge.Text = badgeText
@@ -1544,13 +1944,18 @@ local function UpdateStats()
 	end)
 	StatWave.Text = wave
 
+	StatTimer.Text = IsInGame() and GetTimerText() or "-"
+
 	pcall(function() StatGold.Text = FormatNumber(Gold.Value) end)
 
 	local stateText, stateColor
-	if _G.stopAll then
+	if IsInGame() and IsEndScreenVisible() then
+		stateText, stateColor = "EXITING", COLORS.amber
+	elseif _G.stopAll then
 		stateText, stateColor = "STOPPED", COLORS.red
 	elseif not IsInGame() then
-		stateText, stateColor = "IDLE", COLORS.gray
+		stateText = LobbyState.target and "JOINING" or "LOBBY"
+		stateColor = COLORS.accent
 	elseif not _G.miraclePhaseComplete then
 		stateText, stateColor = "MIRACLE", COLORS.amber
 	else
@@ -1565,12 +1970,14 @@ task.spawn(function()
 		pcall(UpdateStats)
 		pcall(Evaluate)
 		pcall(UpdatePlacement)
+		pcall(UpdateLobbyView)
 	end
 end)
 
 pcall(UpdateStats)
 pcall(Evaluate)
 pcall(UpdatePlacement)
+pcall(UpdateLobbyView)
 
 -- Minimize / drag ---------------------------------------------
 local minimized = false
@@ -1629,3 +2036,9 @@ print("[SYSTEM] Tower Control Started")
 print("[SYSTEM] King Domain: all maps")
 print("[UI] 右侧小按钮(可拖动)/RightControl 显示隐藏")
 print("========================================")
+
+end)
+
+if not uiOk then
+	warn("[UI] 加载失败, 其余功能照常运行: " .. tostring(uiErr))
+end
