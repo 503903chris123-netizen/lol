@@ -83,7 +83,6 @@ local ChangeTowerMode = Lazy(ReplicatedStorage, "Functions", "ChangeTowerMode")
 
 local AutoSkip = Lazy(ReplicatedStorage, "Remotes", "AutoSkip")
 local GetAllData = Lazy(ReplicatedStorage, "Remotes", "GetAllData")
-local GojoDomain = Lazy(ReplicatedStorage, "Remotes", "GojoDomain")
 
 --========================================================--
 -- MAX PERFORMANCE
@@ -353,13 +352,13 @@ local POSITIONS = {
 	),
 }
 
--- JujutsuHigh: 农场塔 (Tree / Pinata / Frost) 和 Starter 放在一起, Kogane 不变
-do
-	local jj = POSITIONS.JujutsuHigh
-	jj.TREE = jj.BASIC
-	jj.PINATA = jj.BASIC
-	jj.FROST = jj.BASIC
-	jj.CHEAP = jj.BASIC
+-- 所有地图: 所有农场塔 (Tree / Pinata / Frost / Agent / Kogane) 都和 Starter 放同一个坐标
+for _, posTable in pairs(POSITIONS) do
+	posTable.TREE = posTable.BASIC
+	posTable.PINATA = posTable.BASIC
+	posTable.FROST = posTable.BASIC
+	posTable.CHEAP = posTable.BASIC
+	posTable.KOGANE = posTable.BASIC
 end
 
 -- Meguna: 攻击塔 (KingOfCursesEvo / StrongestSorcererEvo) 和 Starter 放在一起
@@ -498,11 +497,9 @@ local function PlaceTower(nameKey)
 		local farmUUID = GetFarmUUID()
 		if not farmUUID then return false end
 
-		local frostCFrame = FROST_BLOSSOM_CFRAME
-		if DetectMap() == "JujutsuHigh" then
-			local pt = GetPositions()
-			if pt and pt.FROST then frostCFrame = pt.FROST end
-		end
+		local pt = GetPositions()
+		local frostCFrame = pt and pt.FROST
+		if not frostCFrame then return false end
 
 		local ok, ret = pcall(function()
 			return SpawnNewTower:InvokeServer(farmUUID, frostCFrame)
@@ -523,8 +520,12 @@ local function PlaceTower(nameKey)
 		local farmUUID = GetFarmUUID()
 		if not farmUUID then return false end
 
+		local pt = GetPositions()
+		local koganeCFrame = pt and pt.KOGANE
+		if not koganeCFrame then return false end
+
 		local ok, ret = pcall(function()
-			return SpawnNewTower:InvokeServer(farmUUID, KOGANE_CFRAME, king)
+			return SpawnNewTower:InvokeServer(farmUUID, koganeCFrame, king)
 		end)
 		if ok and ret then
 			lastPlaced[nameKey] = tick()
@@ -631,9 +632,7 @@ local function UpgradeLoop()
 				or NameMatches(tower.Name, TOWER_NAMES.TREE)
 				or NameMatches(tower.Name, TOWER_NAMES.KOGANE)
 
-			local kingBusy = _G.kingCycling and NameMatches(tower.Name, TOWER_NAMES.KING)
-
-			if not (_G.upgradeBlocked and affected) and not kingBusy then
+			if not (_G.upgradeBlocked and affected) then
 				pcall(function() UpgradeTower:InvokeServer(tower) end)
 			end
 		end
@@ -780,26 +779,8 @@ task.spawn(function()
 end)
 
 --========================================================--
--- DOMAIN (Gojo Domain 全图; King Domain 全图, 见下方)
+-- DOMAIN (Strongest 不开领域; 只有 King Domain, 见下方)
 --========================================================--
-
-task.spawn(function()
-	while task.wait(2) do
-		if not _G.stopAll then
-			pcall(function()
-				local towersFolder = Workspace:FindFirstChild("Towers")
-				if not towersFolder then return end
-
-				for _, t in ipairs(towersFolder:GetChildren()) do
-					if NameMatches(t.Name, TOWER_NAMES.GOJO) then
-						pcall(function() GojoDomain:FireServer(t) end)
-						break
-					end
-				end
-			end)
-		end
-	end
-end)
 
 --========================================================--
 -- KING DOMAIN: 所有地图 (无数字 + 2~7 全试)
@@ -838,97 +819,6 @@ task.spawn(function()
 					FireAllDomain(TOWER_NAMES.KING, kingDomain)
 				end
 			end)
-		end
-	end
-end)
-
---========================================================--
--- KING 循环 (Wave >= 25 且 Gold >= 2400): King 每个等级 (1~8) 都开一次领域, 8级开完删除, 再放 (1级) 重复
---  Gold < 2400 就停, 回到普通补塔逻辑; Gold 回到 >= 2400 又继续. Wave 50 (stopAll) 一起停.
---========================================================--
-
-local KING_CYCLE_WAVE = 25
-local KING_CYCLE_GOLD = 2400
-local KING_MAX_LEVEL = 8
-_G.kingCycling = false
-
-local function GetWaveNumber()
-	local info = Workspace:FindFirstChild("Info")
-	local w = info and info:FindFirstChild("Wave")
-	local ok, v = pcall(function() return w and w.Value end)
-	return (ok and tonumber(v)) or 0
-end
-
-local function GetGoldNumber()
-	local ok, v = pcall(function() return Gold.Value end)
-	return (ok and tonumber(v)) or 0
-end
-
-local function FireKingDomain()
-	local r = ReplicatedStorage:FindFirstChild("Remotes")
-	r = r and r:FindFirstChild("Towers")
-	r = r and r:FindFirstChild("KingOfCursesEvo")
-	r = r and r:FindFirstChild("DomainActive")
-	if r then
-		FireAllDomain(TOWER_NAMES.KING, r)
-	end
-end
-
--- 一轮: 放 King (1级) -> 开领域 -> 升2级 -> 开领域 -> ... -> 8级开领域 -> 删除 -> 再放...
-local firedKing, firedLevel = nil, 0
-
-local function KingCycleStep()
-	local king = GetTowersByName(TOWER_NAMES.KING)[1]
-
-	-- 没有 King: 放一个 (1级), 等它出现
-	if not king then
-		firedKing, firedLevel = nil, 0
-		for _ = 1, 20 do
-			lastPlaced.KING = 0  -- 跳过放置冷却
-			PlaceTower("KING")
-			task.wait(0.05)
-			if #GetTowersByName(TOWER_NAMES.KING) > 0 then return end
-		end
-		return
-	end
-
-	local lvl = GetTowerLevel(king)
-
-	-- 当前等级先开一次领域 (每个等级只开一次)
-	if firedKing ~= king or firedLevel ~= lvl then
-		pcall(FireKingDomain)
-		firedKing, firedLevel = king, lvl
-	end
-
-	if lvl >= KING_MAX_LEVEL then
-		-- 8级开完领域 -> 删除, 下一轮重新放
-		pcall(function() SellTower:InvokeServer(king) end)
-		for _ = 1, 20 do
-			if #GetTowersByName(TOWER_NAMES.KING) == 0 then break end
-			task.wait(0.05)
-		end
-		firedKing, firedLevel = nil, 0
-	else
-		-- 开完领域 -> 升一级, 等等级变化
-		pcall(function() UpgradeTower:InvokeServer(king) end)
-		for _ = 1, 20 do
-			if (not king.Parent) or GetTowerLevel(king) > lvl then break end
-			task.wait(0.05)
-		end
-	end
-end
-
-task.spawn(function()
-	while task.wait(0.05) do
-		local active = (not _G.stopAll)
-			and IsInGame()
-			and GetWaveNumber() >= KING_CYCLE_WAVE
-			and GetGoldNumber() >= KING_CYCLE_GOLD
-			and ((not dataLoaded) or equippedSet[TOWER_NAMES.KING] == true)
-
-		_G.kingCycling = active and true or false
-		if active then
-			pcall(KingCycleStep)
 		end
 	end
 end)
@@ -1041,7 +931,7 @@ end
 --========================================================--
 
 local LOBBY_TP_OFFSET = Vector3.new(0, 3, 0)  -- 传送到传送器中心上方的偏移, 站位不对就改这里
-local CIRCLE_RADIUS = 3                        -- 绕圈半径
+local CIRCLE_RADIUS = 4.5                        -- 绕圈半径
 local CIRCLE_STEPS = 12                        -- 绕一圈的段数
 local CIRCLE_STEP_TIME = 0.08                  -- 每段 tween 时间
 local JOIN_TIMEOUT = 6                         -- 进了这么久还在大厅就重新传送 / 换传送器
@@ -2056,8 +1946,6 @@ local function UpdateStats()
 	elseif not IsInGame() then
 		stateText = LobbyState.target and "JOINING" or "LOBBY"
 		stateColor = COLORS.accent
-	elseif _G.kingCycling then
-		stateText, stateColor = "CYCLE", COLORS.accent
 	elseif not _G.miraclePhaseComplete then
 		stateText, stateColor = "MIRACLE", COLORS.amber
 	else
