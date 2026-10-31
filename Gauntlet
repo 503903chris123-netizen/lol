@@ -361,11 +361,11 @@ for _, posTable in pairs(POSITIONS) do
 	posTable.KOGANE = posTable.BASIC
 end
 
--- Meguna: 攻击塔 (KingOfCursesEvo / StrongestSorcererEvo) 和 Starter 放在一起
+-- Meguna: StrongestSorcererEvo 放 Starter 位置, KingOfCursesEvo 放指定坐标
 do
 	local mg = POSITIONS.Meguna
-	mg.KING = mg.BASIC
 	mg.GOJO = mg.BASIC
+	mg.KING = CFrame.new(-32.59, 25.40, -118.65)
 end
 
 local MAP_ORDER = { "Jogo", "JujutsuHigh", "Toji", "Beach", "Dagon", "Meguna", "Shibuya" }
@@ -783,7 +783,7 @@ end)
 --========================================================--
 
 --========================================================--
--- KING DOMAIN: 所有地图 (无数字 + 2~7 全试)
+-- KING DOMAIN: 所有地图 (无数字 + 2~8 全试)
 --========================================================--
 
 local function FireAllDomain(baseName, remote)
@@ -796,8 +796,8 @@ local function FireAllDomain(baseName, remote)
 		pcall(function() remote:FireServer(t) end)
 	end
 
-	-- 2~7
-	for i = 2, 7 do
+	-- 2~8
+	for i = 2, 8 do
 		local ti = towers:FindFirstChild(baseName .. i)
 		if ti then
 			pcall(function() remote:FireServer(ti) end)
