@@ -368,6 +368,14 @@ do
 	mg.KING = CFrame.new(-32.59, 25.40, -118.65)
 end
 
+-- Jogo: 攻击塔 (KingOfCursesEvo / StrongestSorcererEvo) 放在指定坐标
+do
+	local jg = POSITIONS.Jogo
+	local attackPos = CFrame.new(-31.79, 16.17, -93.25)
+	jg.KING = attackPos
+	jg.GOJO = attackPos
+end
+
 local MAP_ORDER = { "Jogo", "JujutsuHigh", "Toji", "Beach", "Dagon", "Meguna", "Shibuya" }
 local currentMap = nil
 
