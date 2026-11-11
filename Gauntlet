@@ -491,6 +491,11 @@ local function PlaceTower(nameKey)
 		return false
 	end
 
+	-- StrongestSorcererEvo 要等 KingOfCursesEvo 已经放下才能放 (没带 King 就不等)
+	if nameKey == "GOJO" and equippedSet[TOWER_NAMES.KING] and #GetTowersByName(TOWER_NAMES.KING) == 0 then
+		return false
+	end
+
 	-- 目标数量: 已达到就不放, 没到(或被删了)就补
 	local target = TARGET_COUNT[nameKey] or 1
 	if #GetTowersByName(towerName) >= target then
