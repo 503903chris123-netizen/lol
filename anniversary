@@ -1,0 +1,1713 @@
+--========================================================--
+-- PINATA STARTER (含大厅自动进传送器)
+--  局内 (Map 是 Anniversary / 场上有 Pinata): 跟着 Workspace.Mobs.Pinata 放塔 / 升级 / 开领域
+--    Starter (Miracle / Harvester): 一开始放在固定位置 (117.65, 0.86, -121.48); Pinata 的 X 小于等于这个 X 后,
+--                                   删掉, 改成放在 Pinata 的 X - 20, 之后 Pinata 越过塔 20 格再删掉重放
+--    Meguna  (King / Kogane / Amplifying): 放在 Pinata 的 X - 80, Pinata 越过塔 80 格再删掉重放
+--    KingOfCursesEvo (Meguna) 到 3 级后不再开领域, 其他塔照常开
+--  局外 (大厅):
+--    整点前 5 分钟 (到整点后 3 分钟) 且这一小时还没打过 Pinata -> 走路去 Workspace.PinataTeleporters 里
+--      人数 < 10 的传送器, 长按互动键进入; 满人就换另一个
+--    其余时间 / Pinata 打完之后 -> 走路进第一个传送器 (Workspace.Teleporters.Teleporter1) 打普通关
+--  结算界面出现 -> 自动 ExitGame 回大厅
+--========================================================--
+
+local environment = getgenv()
+
+-- 用 JobId 判断是否已在当前服务器运行
+if environment.PinataStarterJob == game.JobId then
+	return
+end
+environment.PinataStarterJob = game.JobId
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
+local PathfindingService = game:GetService("PathfindingService")
+local TweenService = game:GetService("TweenService")
+
+local LocalPlayer = Players.LocalPlayer
+
+--========================================================--
+-- 设置
+--========================================================--
+
+local PLACE_DELAY = 0.03     -- 放置循环间隔
+local UPGRADE_DELAY = 0.05   -- 升级循环间隔
+local DOMAIN_DELAY = 0.05    -- 开领域循环间隔
+
+local DOMAIN_MAX_LEVEL = 3   -- Meguna 到达这个等级后不再开领域 (想"3级以后"才停, 改成 4)
+
+-- 大厅 / 定时
+local PREP_SECONDS = 60           -- 整点前多少秒开始准备进 Pinata (1 分钟); 到点不管在哪都会 leave 回大厅
+local FIXED_Y = 0.69              -- 放塔位置: 只改 X, Y / Z 固定
+local FIXED_Z = -109.06
+local TOWER_SPACING = 2           -- 同一组里每个塔 X 方向错开多少格 (Kogane 不偏移)
+local PLACE_RANGE = 15            -- 离放塔点多近才放 (不够近会先自动走过去)
+local AFTER_SECONDS = 900         -- 整点后 15 分钟内, 只要这个整点还没打过 Pinata 就继续进; 打过了就去 Teleporter1
+local PINATA_MAP_KEYWORD = "anniversary"   -- Workspace.Map 里的地图名包含这个词 = Pinata 图
+local NEAR_DIST = 6               -- 离传送器多近算"到了"
+local HOLD_RETRY = 8              -- 长按互动后多久还在大厅就再按一次
+local STEP_DELAY = 0.5            -- 大厅循环间隔
+
+-- 两组塔: offset 可以在 UI 里改
+local GROUPS = {
+	-- offset: 放在 Pinata 的 X + offset; margin: Pinata 越过塔多少格才删掉重放
+	{ id = "starter", title = "STARTER", sub = "Miracle / Harvester", towers = { "MiracleSorcerer", "HarvesterCurse" },
+	  offset = -20, margin = 20, initial = Vector3.new(113.79, FIXED_Y, FIXED_Z) },
+	{ id = "meguna",  title = "MEGUNA",  sub = "King / Kogane / Amplifying", towers = { "KingOfCursesEvo", "Kogane", "AmplifyingSorcerer" },
+	  offset = -80, margin = 80 },
+}
+for _, g in ipairs(GROUPS) do
+	g.anchor = g.initial  -- 当前放塔的位置 (Vector3, Y/Z 固定); 有 initial 的组一开始就放在这个固定位置
+	g.selling = false     -- 正在删塔, 暂停放置
+	g.reanchor = false    -- UI 改了偏移: 删掉现有的塔, 按新偏移重放
+	g.leftInitial = false -- 有 initial 的组: 第一次越过固定位置之后才用 margin
+end
+
+local MEGUNA_NAME = "KingOfCursesEvo"
+
+-- Kogane: 从 GetAllData 获取不到 uuid 时用这个固定 uuid, 放置时第 3 个参数绑定 KingOfCursesEvo
+local KOGANE_UUID = "f4794151-3ac0-47a5-8dab-05829561c830"
+local KOGANE_ANGLES = CFrame.Angles(-3.1415927410125732, 0, -3.1415927410125732)
+
+local AMPLIFYING = "AmplifyingSorcerer"   -- 实际名字不确定: 名字里带 "amplif" 的都算
+local realName = {}                        -- [基础塔名] = GetAllData 里查到的真实塔名 (去掉编号)
+
+--========================================================--
+-- 对象 (局内才有, 用到时才去找, 找不到只是这一次不执行)
+--========================================================--
+
+local function Lazy(root, ...)
+	local path = { ... }
+	return setmetatable({}, {
+		__index = function(_, key)
+			local o = root
+			for _, n in ipairs(path) do
+				o = o and o:FindFirstChild(n)
+			end
+			if not o then
+				error("missing: " .. table.concat(path, "."), 0)
+			end
+			local v = o[key]
+			if type(v) == "function" then
+				return function(_, ...) return v(o, ...) end
+			end
+			return v
+		end,
+	})
+end
+
+local SpawnNewTower = Lazy(ReplicatedStorage, "Functions", "SpawnNewTower")
+local UpgradeTower = Lazy(ReplicatedStorage, "Functions", "UpgradeTower")
+local SellTower = Lazy(ReplicatedStorage, "Functions", "SellTower")
+local GetAllData = Lazy(ReplicatedStorage, "Remotes", "GetAllData")
+
+--========================================================--
+-- 局内 / 局外判断
+--========================================================--
+
+-- 局内: Workspace.Map 里有东西; 备用: 有 Workspace.Info.Wave
+local function IsInGame()
+	local map = Workspace:FindFirstChild("Map")
+	if map and #map:GetChildren() > 0 then return true end
+
+	local info = Workspace:FindFirstChild("Info")
+	if info and info:FindFirstChild("Wave") then return true end
+	return false
+end
+
+-- Pinata 图: Workspace.Map.Anniversary (地图名包含 anniversary 也算); 备用: 场上有 Pinata
+local function IsPinataMap()
+	if not IsInGame() then return false end
+
+	local map = Workspace:FindFirstChild("Map")
+	if map and map:FindFirstChild("Anniversary") then return true end
+	if map then
+		if string.find(string.lower(map.Name), PINATA_MAP_KEYWORD, 1, true) and map.Name ~= "Map" then
+			return true
+		end
+		for _, c in ipairs(map:GetChildren()) do
+			if string.find(string.lower(c.Name), PINATA_MAP_KEYWORD, 1, true) then
+				return true
+			end
+		end
+	end
+
+	local mobs = Workspace:FindFirstChild("Mobs")
+	if mobs and mobs:FindFirstChild("Pinata") then return true end
+	return false
+end
+
+--========================================================--
+-- 等局内加载完再做举动 (地图 / 角色 / 其他玩家加载完), 否则刚进局就可能误判地图而退出
+--========================================================--
+
+local GAME_LOAD_GRACE = 8   -- 检测到进入局内后, 至少等这么多秒才允许做"退出"类举动
+local gameSince = nil
+
+task.spawn(function()
+	while task.wait(0.25) do
+		if IsInGame() then
+			gameSince = gameSince or tick()
+		else
+			gameSince = nil
+		end
+	end
+end)
+
+local function IsGameReady()
+	if not gameSince or tick() - gameSince < GAME_LOAD_GRACE then return false end
+
+	local map = Workspace:FindFirstChild("Map")
+	if not (map and #map:GetChildren() > 0) then return false end
+
+	local char = LocalPlayer.Character
+	if not (char and char:FindFirstChild("HumanoidRootPart")) then return false end
+	return true
+end
+
+--========================================================--
+-- 塔名 / uuid (只放装备了的)
+--========================================================--
+
+local function NameMatches(instName, base)
+	local n = string.lower(tostring(instName))
+	local b = string.lower(base)
+	if string.sub(n, 1, #b) ~= b then return false end
+	return string.match(string.sub(n, #b + 1), "^[%s%d_%-%.%(%)]*$") ~= nil
+end
+
+local function DataNameMatches(base, name)
+	if base == AMPLIFYING then
+		return string.find(string.lower(tostring(name)), "amplif", 1, true) ~= nil
+	end
+	return NameMatches(name, base)
+end
+
+local function StripNumber(name)
+	local base = string.gsub(tostring(name), "[%s_%-%.]*%d+$", "")
+	return base
+end
+
+-- 场上的塔实例是否属于这个塔名
+local function InstMatches(instName, base)
+	if base == AMPLIFYING then
+		return string.find(string.lower(tostring(instName)), "amplif", 1, true) ~= nil
+	end
+	return NameMatches(instName, realName[base] or base)
+end
+
+local uuidByName = {}   -- [塔名] = uuid
+local lastData = 0
+
+local function RefreshUUIDs()
+	if tick() - lastData < 3 then return end
+	lastData = tick()
+
+	local ok, data = pcall(function() return GetAllData:InvokeServer() end)
+	if not ok or type(data) ~= "table" or type(data.Towers) ~= "table" then return end
+
+	local hasFlag = false
+	for _, t in pairs(data.Towers) do
+		if type(t) == "table" and t.Equipped ~= nil then hasFlag = true break end
+	end
+
+	for _, g in ipairs(GROUPS) do
+		for _, base in ipairs(g.towers) do
+			local found, foundEquipped, foundName
+			for _, t in pairs(data.Towers) do
+				if type(t) == "table" and t.Name and t.UUID and DataNameMatches(base, t.Name) then
+					local isEq = (not hasFlag) or (t.Equipped == true)
+					if not found or (isEq and not foundEquipped) then
+						found, foundEquipped, foundName = t.UUID, isEq, t.Name
+					end
+				end
+			end
+			if foundName then realName[base] = StripNumber(foundName) end
+
+			-- 没装备的不放
+			local usable = found and ((not hasFlag) or foundEquipped)
+			if usable and not uuidByName[base] then
+				print("[PinataStarter] " .. base .. " uuid = " .. tostring(found))
+			end
+			uuidByName[base] = usable and found or nil
+		end
+	end
+end
+
+task.spawn(function()
+	while task.wait(1) do
+		pcall(RefreshUUIDs)
+	end
+end)
+
+--========================================================--
+-- Pinata 位置
+--========================================================--
+
+local lastPinataX = nil   -- 给 UI 显示
+
+local function GetPinataPosition()
+	local mobs = Workspace:FindFirstChild("Mobs")
+	local pinata = mobs and mobs:FindFirstChild("Pinata")
+	if not pinata then return nil end
+
+	local ok, cf = pcall(function() return pinata:GetPivot() end)
+	if ok and cf then return cf.Position end
+	return nil
+end
+
+--========================================================--
+-- 放置 / 删除 / 重放
+--========================================================--
+
+local function Dir(g)
+	return g.offset >= 0 and 1 or -1
+end
+
+-- Pinata 越过塔多少格才删掉重放 (有 initial 的组: 第一次用固定位置时, 越过就删, 不加 margin)
+local function Margin(g)
+	if g.initial and not g.leftInitial then return 0 end
+	return g.margin or 0
+end
+
+local function GetGroupTowers(g)
+	local list = {}
+	local towers = Workspace:FindFirstChild("Towers")
+	if not towers then return list end
+
+	for _, t in ipairs(towers:GetChildren()) do
+		for _, base in ipairs(g.towers) do
+			if InstMatches(t.Name, base) then
+				table.insert(list, t)
+				break
+			end
+		end
+	end
+	return list
+end
+
+-- 离放塔点够近才放 (不够近时, 下面的走路循环会先走过去)
+local function IsNearPos(pos)
+	local char = LocalPlayer.Character
+	local r = char and char:FindFirstChild("HumanoidRootPart")
+	if not r then return false end
+	local a, b = r.Position, pos
+	return (Vector3.new(a.X, 0, a.Z) - Vector3.new(b.X, 0, b.Z)).Magnitude <= PLACE_RANGE
+end
+
+-- 每个塔名一个疯狂放置循环 (只在 Pinata 图里放)
+local function StartPlacer(g, base)
+	-- 同一组里每个塔 X 错开一点 (不叠放); Kogane 不偏移
+	local slotX = 0
+	if base ~= "Kogane" then
+		local idx = 0
+		for _, b in ipairs(g.towers) do
+			if b == base then break end
+			if b ~= "Kogane" then idx = idx + 1 end
+		end
+		slotX = idx * TOWER_SPACING
+	end
+
+	task.spawn(function()
+		while true do
+			local pos = g.anchor
+			if pos and not g.selling and IsPinataMap() and IsNearPos(pos) then
+				if base == "Kogane" then
+					-- Kogane: GetAllData 拿不到就用固定 uuid; 要先有 KingOfCursesEvo, 绑定它
+					local uuid = uuidByName[base] or KOGANE_UUID
+					local king = Workspace:FindFirstChild("Towers")
+					king = king and king:FindFirstChild(MEGUNA_NAME)
+					if king then
+						pcall(function() SpawnNewTower:InvokeServer(uuid, CFrame.new(pos) * KOGANE_ANGLES, king) end)
+					end
+				else
+					local uuid = uuidByName[base]
+					if uuid then
+						pcall(function() SpawnNewTower:InvokeServer(uuid, CFrame.new(pos + Vector3.new(slotX, 0, 0))) end)
+					end
+				end
+			end
+			task.wait(PLACE_DELAY)
+		end
+	end)
+end
+
+for _, g in ipairs(GROUPS) do
+	for _, base in ipairs(g.towers) do
+		StartPlacer(g, base)
+	end
+end
+
+local sellingInst = {}  -- [塔实例] = true (删除请求还没返回)
+
+-- 跟踪 Pinata: 第一次定位, 之后 Pinata 走到某组塔后面 (或改了偏移) 就删掉这组塔重放
+task.spawn(function()
+	while task.wait(0.03) do
+		pcall(function()
+			if not IsPinataMap() then
+				lastPinataX = nil
+				return
+			end
+
+			local pos = GetPinataPosition()
+			if not pos then return end
+			lastPinataX = pos.X
+
+			for _, g in ipairs(GROUPS) do
+				if not g.anchor then
+					g.anchor = Vector3.new(pos.X + g.offset, FIXED_Y, FIXED_Z)
+					print("[PinataStarter] " .. g.title .. " 放置位置: " .. tostring(g.anchor))
+				else
+					local passed = g.reanchor or (pos.X - g.anchor.X) * Dir(g) >= Margin(g)
+					if passed or g.selling then
+						-- 条件成立: 疯狂删除这组塔, 直到删干净, 再按最新位置重放 (条件随之不再成立)
+						g.selling = true
+						local left = GetGroupTowers(g)
+						if #left == 0 then
+							g.reanchor = false
+							g.leftInitial = true
+							g.anchor = Vector3.new(pos.X + g.offset, FIXED_Y, FIXED_Z)
+							g.selling = false
+							print("[PinataStarter] " .. g.title .. " 已删除, 重放位置: " .. tostring(g.anchor))
+						else
+							for _, t in ipairs(left) do
+								if not sellingInst[t] then
+									sellingInst[t] = true
+									task.delay(0.25, function() sellingInst[t] = nil end)  -- 请求卡住也要重发
+									task.spawn(function()
+										pcall(function() SellTower:InvokeServer(t) end)
+										sellingInst[t] = nil
+									end)
+								end
+							end
+						end
+					end
+				end
+			end
+		end)
+	end
+end)
+
+--========================================================--
+-- 疯狂升级 (所有塔)
+--========================================================--
+
+local upgrading = {}  -- [塔实例] = true  (这个塔有升级请求还没返回)
+
+task.spawn(function()
+	while task.wait(UPGRADE_DELAY) do
+		pcall(function()
+			if not IsPinataMap() then return end
+
+			local towers = Workspace:FindFirstChild("Towers")
+			if not towers then return end
+
+			for _, tower in ipairs(towers:GetChildren()) do
+				if not upgrading[tower] then
+					upgrading[tower] = true
+					task.spawn(function()
+						pcall(function() UpgradeTower:InvokeServer(tower) end)
+						upgrading[tower] = nil
+					end)
+				end
+			end
+		end)
+	end
+end)
+
+--========================================================--
+-- 疯狂对 Meguna 开领域 (无编号 + 1~8 全试)
+--   塔到 DOMAIN_MAX_LEVEL 级后停开; 检测不到等级时照常开
+--========================================================--
+
+-- 读塔的等级: 先看属性, 再看名为 Level/Upgrade/Tier 的数值子对象 (顶层 + 一层子对象)
+local function TowerLevel(tower)
+	if not tower then return nil end
+
+	for _, attr in ipairs({ "Level", "Upgrade", "Upgrades", "Tier", "Evolution" }) do
+		local ok, v = pcall(function() return tower:GetAttribute(attr) end)
+		if ok and type(v) == "number" then return v end
+	end
+
+	local function ValueOf(inst)
+		if inst and inst:IsA("ValueBase") and type(inst.Value) == "number" then
+			local n = string.lower(inst.Name)
+			if n == "level" or n == "upgrade" or n == "upgrades" or n == "tier" then
+				return inst.Value
+			end
+		end
+		return nil
+	end
+
+	for _, child in ipairs(tower:GetChildren()) do
+		local v = ValueOf(child)
+		if v then return v end
+	end
+	for _, child in ipairs(tower:GetChildren()) do
+		for _, sub in ipairs(child:GetChildren()) do
+			local v = ValueOf(sub)
+			if v then return v end
+		end
+	end
+
+	return nil
+end
+
+local function CanDomain(tower)
+	local lv = TowerLevel(tower)
+	-- 检测不到等级时照常开
+	return lv == nil or lv < DOMAIN_MAX_LEVEL
+end
+
+task.spawn(function()
+	local remote
+	while task.wait(DOMAIN_DELAY) do
+		pcall(function()
+			if not IsPinataMap() then return end
+
+			if not remote then
+				local r = ReplicatedStorage:FindFirstChild("Remotes")
+				r = r and r:FindFirstChild("Towers")
+				r = r and r:FindFirstChild(MEGUNA_NAME)
+				remote = r and r:FindFirstChild("DomainActive")
+			end
+			if not remote then return end
+
+			local towers = Workspace:FindFirstChild("Towers")
+			if not towers then return end
+
+			local t = towers:FindFirstChild(MEGUNA_NAME)
+			if t and CanDomain(t) then
+				pcall(function() remote:FireServer(t) end)
+			end
+			for i = 1, 8 do
+				local ti = towers:FindFirstChild(MEGUNA_NAME .. i)
+				if ti and CanDomain(ti) then
+					pcall(function() remote:FireServer(ti) end)
+				end
+			end
+		end)
+	end
+end)
+
+--========================================================--
+-- 结算界面 -> ExitGame (回大厅)
+--========================================================--
+
+local function IsEndScreenVisible()
+	local pg = LocalPlayer:FindFirstChild("PlayerGui")
+	local gg = pg and pg:FindFirstChild("GameGui")
+	local es = gg and gg:FindFirstChild("EndScreen")
+	if not es then return false end
+
+	local ok, v = pcall(function()
+		if es:IsA("LayerCollector") then return es.Enabled end
+		return es.Visible
+	end)
+	return ok and v == true
+end
+
+local function CallExitGame()
+	local events = ReplicatedStorage:FindFirstChild("Events")
+	local remote = events and events:FindFirstChild("ExitGame")
+	if not remote then return false end
+
+	pcall(function()
+		if remote:IsA("RemoteFunction") then
+			remote:InvokeServer()
+		else
+			remote:FireServer()
+		end
+	end)
+	return true
+end
+
+task.spawn(function()
+	local lastFire = 0
+	while task.wait(0.2) do
+		if IsInGame() and IsEndScreenVisible() then
+			if tick() - lastFire > 1 then
+				lastFire = tick()
+				print("[PinataStarter] 结算界面出现, 调用 ExitGame")
+				task.spawn(CallExitGame)
+			end
+		else
+			lastFire = 0
+		end
+	end
+end)
+
+--========================================================--
+-- 定时: 整点前 5 分钟进 Pinata, 打完 / 其余时间进第一个传送器
+--========================================================--
+
+local DONE_FILE = "PinataDoneEvent.txt"
+
+-- 返回: 当前活动的整点 (os.time 秒), 是否在窗口内, 距离整点秒数 (负数 = 还没到)
+local function EventInfo()
+	local t = os.time()
+	local ev = math.floor((t + PREP_SECONDS) / 3600) * 3600
+	local inWindow = (t - ev) <= AFTER_SECONDS
+	return ev, inWindow, ev - t
+end
+
+-- 这个整点的 Pinata 是否已经打过 (换服务器后靠文件记住)
+local function GetDone()
+	if environment.PinataDoneEvent == nil then
+		pcall(function()
+			if isfile and isfile(DONE_FILE) then
+				environment.PinataDoneEvent = tonumber(readfile(DONE_FILE)) or 0
+			end
+		end)
+	end
+	return environment.PinataDoneEvent
+end
+
+local function MarkDone(ev)
+	environment.PinataDoneEvent = ev
+	pcall(function()
+		if writefile then writefile(DONE_FILE, tostring(ev)) end
+	end)
+end
+
+local function WantPinata()
+	local ev, inWindow = EventInfo()
+	return inWindow and GetDone() ~= ev, ev
+end
+
+-- 进了 Pinata 图就记为这个整点已打过; 之后回大厅就去打普通关
+task.spawn(function()
+	local marked = false
+	while task.wait(1) do
+		if IsPinataMap() then
+			if not marked then
+				marked = true
+				local ev = EventInfo()
+				MarkDone(ev)
+				print("[PinataStarter] 已进入 Pinata, 记录本次整点")
+			end
+		else
+			marked = false
+		end
+	end
+end)
+
+--========================================================--
+-- 大厅: 走路 + 长按互动键
+--========================================================--
+
+local LobbyState = { status = "等待中", target = nil, heldAt = 0, mode = nil, countText = "-" }
+
+local function GetRoot()
+	local char = LocalPlayer.Character
+	return char and char:FindFirstChild("HumanoidRootPart")
+end
+
+local function GetHumanoid()
+	local char = LocalPlayer.Character
+	return char and char:FindFirstChildOfClass("Humanoid")
+end
+
+local function FlatDist(a, b)
+	return (Vector3.new(a.X, 0, a.Z) - Vector3.new(b.X, 0, b.Z)).Magnitude
+end
+
+-- 走到某一点 (不 TP): 先寻路, 失败就直走; 卡住会跳
+local function WalkTo(goal, abort, timeout)
+	timeout = timeout or 45
+	local t0 = tick()
+
+	local function moveTo(pos, per)
+		local h, r = GetHumanoid(), GetRoot()
+		if not (h and r) then return false end
+		h:MoveTo(pos)
+
+		local start = tick()
+		local lastPos, lastCheck = r.Position, tick()
+		while tick() - start < per do
+			if abort and abort() then return false end
+			r = GetRoot()
+			if not r then return false end
+			if FlatDist(r.Position, pos) <= 3 then return true end
+
+			if tick() - lastCheck >= 1 then
+				if (r.Position - lastPos).Magnitude < 1 then
+					h.Jump = true
+					h:MoveTo(pos)
+				end
+				lastPos, lastCheck = r.Position, tick()
+			end
+			task.wait(0.1)
+		end
+		return false
+	end
+
+	local r = GetRoot()
+	if not r then return false end
+
+	local ok, path = pcall(function()
+		local p = PathfindingService:CreatePath({ AgentRadius = 2.5, AgentHeight = 5, AgentCanJump = true })
+		p:ComputeAsync(r.Position, goal)
+		return p
+	end)
+
+	if ok and path and path.Status == Enum.PathStatus.Success then
+		for _, wp in ipairs(path:GetWaypoints()) do
+			if tick() - t0 > timeout then break end
+			if abort and abort() then return false end
+			if wp.Action == Enum.PathWaypointAction.Jump then
+				local h = GetHumanoid()
+				if h then h.Jump = true end
+			end
+			moveTo(wp.Position, 3)
+		end
+	end
+
+	return moveTo(goal, math.max(5, timeout - (tick() - t0)))
+end
+
+local function FindPrompt(elev)
+	return elev:FindFirstChildWhichIsA("ProximityPrompt", true)
+end
+
+local function PromptPosition(prompt)
+	local p = prompt.Parent
+	if p and p:IsA("BasePart") then return p.Position end
+	if p and p:IsA("Attachment") then return p.WorldPosition end
+	return nil
+end
+
+-- 走过去的目标点: 有互动提示就走到提示旁边, 否则走到传送器中心
+local function StandPosition(elev)
+	local prompt = FindPrompt(elev)
+	if prompt then
+		local pos = PromptPosition(prompt)
+		if pos then return pos end
+	end
+	local ok, pivot = pcall(function() return elev:GetPivot() end)
+	return ok and pivot and pivot.Position or nil
+end
+
+-- 长按互动键 (默认 E, 有 ProximityPrompt 就用它的键和长按时长)
+local function HoldInteract(elev)
+	local prompt = FindPrompt(elev)
+	local hold = 2  -- 每次长按 2 秒, 循环
+	local key = (prompt and prompt.KeyboardKeyCode) or Enum.KeyCode.E
+	if key == Enum.KeyCode.Unknown then key = Enum.KeyCode.E end
+
+	local vim
+	pcall(function() vim = game:GetService("VirtualInputManager") end)
+
+	if vim then
+		pcall(function() vim:SendKeyEvent(true, key, false, game) end)
+		task.wait(hold)
+		pcall(function() vim:SendKeyEvent(false, key, false, game) end)
+	elseif prompt then
+		pcall(function() prompt:InputHoldBegin() end)
+		task.wait(hold)
+		pcall(function() prompt:InputHoldEnd() end)
+	end
+end
+
+-- 读传送器人数: 返回 当前, 上限, 文字 (找不到返回 nil)
+local function ReadCount(elev)
+	local label
+	pcall(function() label = elev.Billboard.BillboardGui.Title.PlayerCount end)
+	if not label then
+		label = elev:FindFirstChild("PlayerCount", true)
+	end
+	if not label then return nil end
+
+	local ok, text = pcall(function() return label.Text end)
+	if not ok or type(text) ~= "string" then return nil end
+
+	text = text:gsub("<[^>]+>", "")
+	local cur, max = string.match(text, "(%d+)%s*/%s*(%d+)")
+	if not cur then return nil, nil, text end
+	return tonumber(cur), tonumber(max), text
+end
+
+local function IsFull(elev)
+	local cur, max = ReadCount(elev)
+	if not cur then return false end
+	return cur >= (max or 10)
+end
+
+local function GetPinataTeleporters()
+	local folder = Workspace:FindFirstChild("PinataTeleporters")
+	local list = {}
+	if not folder then return list end
+	for _, e in ipairs(folder:GetChildren()) do
+		if ReadCount(e) ~= nil or FindPrompt(e) then
+			table.insert(list, e)
+		end
+	end
+	return list
+end
+
+-- Pinata 图里: 有塔还没放 -> 自动走到那组的放塔点 (不 TP), 到了才会放
+task.spawn(function()
+	while task.wait(0.2) do
+		pcall(function()
+			if not IsPinataMap() then return end
+
+			for _, g in ipairs(GROUPS) do
+				local pos = g.anchor
+				if pos and not g.selling then
+					local missing = false
+					for _, base in ipairs(g.towers) do
+						local can = uuidByName[base] ~= nil
+						if base == "Kogane" then can = true end
+						if can then
+							local found = false
+							local towers = Workspace:FindFirstChild("Towers")
+							if towers then
+								for _, t in ipairs(towers:GetChildren()) do
+									if InstMatches(t.Name, base) then found = true break end
+								end
+							end
+							if not found then missing = true break end
+						end
+					end
+
+					local r = GetRoot()
+					if missing and r and FlatDist(r.Position, pos) > 4 then
+						WalkTo(pos, function()
+							return (not IsPinataMap()) or g.selling or g.anchor ~= pos
+						end, 8)
+						return
+					end
+				end
+			end
+		end)
+	end
+end)
+
+-- 整点前 PREP_SECONDS 秒: 不管在哪张图 (Pinata 图除外), 直接 leave 回大厅准备打 Pinata
+local function CallLeave()
+	local names = { "Leave", "LeaveGame", "ExitGame" }
+	local containers = { ReplicatedStorage:FindFirstChild("Events"), ReplicatedStorage:FindFirstChild("Remotes") }
+	for _, name in ipairs(names) do
+		for _, c in ipairs(containers) do
+			local remote = c and c:FindFirstChild(name)
+			if remote then
+				pcall(function()
+					if remote:IsA("RemoteFunction") then
+						remote:InvokeServer()
+					else
+						remote:FireServer()
+					end
+				end)
+				return true
+			end
+		end
+	end
+	return false
+end
+
+task.spawn(function()
+	while task.wait(1) do
+		pcall(function()
+			local want = WantPinata()
+			if want and IsInGame() and IsGameReady() and not IsPinataMap() then
+				LobbyState.status = "准备 Pinata · leave 回大厅"
+				task.spawn(CallLeave)
+			end
+		end)
+	end
+end)
+
+local function SetMode(mode)
+	if LobbyState.mode ~= mode then
+		LobbyState.mode = mode
+		LobbyState.target = nil
+		LobbyState.heldAt = 0
+	end
+end
+
+-- Pinata: 走到人数 < 10 的传送器, 长按互动键; 满人了 (还没到的时候) 就换
+local function PinataLobby()
+	SetMode("pinata")
+
+	local list = GetPinataTeleporters()
+	if #list == 0 then
+		LobbyState.status = "等待 PinataTeleporters"
+		return
+	end
+
+	local root = GetRoot()
+	if not root then LobbyState.status = "等待角色" return end
+
+	local target = LobbyState.target
+	if target and not target.Parent then target = nil end
+
+	-- 目标满人了, 并且自己还没站在里面 -> 换一个
+	if target then
+		local pos = StandPosition(target)
+		local near = pos and FlatDist(root.Position, pos) <= NEAR_DIST
+		if (not near) and IsFull(target) then
+			target = nil
+		end
+	end
+
+	if not target then
+		for _, e in ipairs(list) do
+			if not IsFull(e) then
+				target = e
+				break
+			end
+		end
+		if not target then
+			LobbyState.target = nil
+			LobbyState.status = "传送器都满了, 等待"
+			return
+		end
+		LobbyState.target = target
+		LobbyState.heldAt = 0
+	end
+
+	local _, _, text = ReadCount(target)
+	LobbyState.countText = text or "-"
+
+	local pos = StandPosition(target)
+	if not pos then LobbyState.status = "找不到传送器位置" return end
+
+	local function abort()
+		local want = WantPinata()
+		return IsInGame() or (not want) or LobbyState.target ~= target
+			or ((not IsFull(target)) == false and FlatDist((GetRoot() or root).Position, pos) > NEAR_DIST)
+	end
+
+	if FlatDist(root.Position, pos) > NEAR_DIST then
+		LobbyState.status = "走向 " .. target.Name
+		WalkTo(pos, abort)
+		return
+	end
+
+	-- 在传送器旁边就一直长按 (每次 2 秒, 循环)
+	LobbyState.status = "长按互动 · " .. target.Name
+	LobbyState.heldAt = tick()
+	HoldInteract(target)
+end
+
+-- Teleporter1: 瞬间 TP 到传送器上方, 再绕圈 tween 让传送器检测到玩家进入 (不绕圈进不去)
+local CIRCLE_RADIUS = 4.5
+local CIRCLE_STEPS = 12
+local CIRCLE_STEP_TIME = 0.08
+
+local function TeleportInto(elev)
+	local root = GetRoot()
+	if not root then return false end
+
+	local okPivot, pivot = pcall(function() return elev:GetPivot() end)
+	if not okPivot or not pivot then return false end
+
+	local center = pivot.Position + Vector3.new(0, 3, 0)
+	pcall(function() root.CFrame = CFrame.new(center) end)
+
+	for i = 1, CIRCLE_STEPS do
+		if IsInGame() then return true end
+		root = GetRoot()
+		if not root then return false end
+
+		local ang = (i / CIRCLE_STEPS) * math.pi * 2
+		local p = center + Vector3.new(math.cos(ang) * CIRCLE_RADIUS, 0, math.sin(ang) * CIRCLE_RADIUS)
+		local ok = pcall(function()
+			local tw = TweenService:Create(root, TweenInfo.new(CIRCLE_STEP_TIME, Enum.EasingStyle.Linear), {
+				CFrame = CFrame.new(p),
+			})
+			tw:Play()
+			tw.Completed:Wait()
+		end)
+		if not ok then return false end
+	end
+
+	root = GetRoot()
+	if root then
+		pcall(function() root.CFrame = CFrame.new(center) end)
+	end
+	return true
+end
+
+-- 普通关: 走进第一个传送器, 选关并开始 (和主脚本同样的 remote)
+local function NormalLobby()
+	SetMode("normal")
+
+	local folder = Workspace:FindFirstChild("Teleporters")
+	local elev = folder and folder:FindFirstChild("Teleporter1")
+	if not elev then
+		LobbyState.status = "等待传送器加载"
+		return
+	end
+	LobbyState.target = elev
+
+	local _, _, text = ReadCount(elev)
+	LobbyState.countText = text or "-"
+
+	local root = GetRoot()
+	if not root then LobbyState.status = "等待角色" return end
+
+	local ok, pivot = pcall(function() return elev:GetPivot() end)
+	if not ok or not pivot then LobbyState.status = "找不到传送器位置" return end
+	local pos = pivot.Position
+
+	-- Teleporter1 直接 TP 进去 (不走路)
+	if (root.Position - pos).Magnitude > 6 then
+		LobbyState.status = "传送到 " .. elev.Name .. " · 绕圈"
+		TeleportInto(elev)
+		task.wait(0.8)  -- 等人数刷新
+	end
+
+	-- 刚离开过 (里面有别人): 冷却一会再回来
+	if tick() < (LobbyState.leaveUntil or 0) then
+		LobbyState.status = "有人, 等待后重试"
+		return
+	end
+
+	-- 进去之后如果有别人 (人数 > 1, 含自己) -> leave
+	local cur = ReadCount(elev)
+	if cur and cur > 1 then
+		LobbyState.status = "有别人, 离开 " .. elev.Name
+		local rs = ReplicatedStorage:FindFirstChild("Remotes")
+		local tps = rs and rs:FindFirstChild("Teleporters")
+		if tps then
+			for _, name in ipairs({ "Leave", "LeaveTeleporter", "LeaveStage", "Exit", "Cancel" }) do
+				local r = tps:FindFirstChild(name)
+				if r then
+					pcall(function() r:FireServer(elev) end)
+				end
+			end
+		end
+		-- 再走出传送器范围
+		root = GetRoot()
+		if root then
+			pcall(function() root.CFrame = CFrame.new(pos + Vector3.new(0, 3, 18)) end)
+		end
+		LobbyState.leaveUntil = tick() + 5
+		return
+	end
+
+	local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+	local tp = remotes and remotes:FindFirstChild("Teleporters")
+	local choose = tp and tp:FindFirstChild("ChooseStage")
+	local start = tp and tp:FindFirstChild("Start")
+	if not (choose and start) then
+		LobbyState.status = "找不到 Remotes.Teleporters"
+		return
+	end
+
+	LobbyState.status = "进入 " .. elev.Name .. " · 开始游戏"
+	pcall(function() choose:FireServer(elev, 1, "Normal", true) end)
+	pcall(function() start:FireServer(elev) end)
+end
+
+local function LobbyStep()
+	if WantPinata() then
+		PinataLobby()
+	else
+		NormalLobby()
+	end
+end
+
+task.spawn(function()
+	while task.wait(STEP_DELAY) do
+		if IsInGame() then
+			LobbyState.status = IsPinataMap() and "Pinata 游戏中" or "游戏中"
+			LobbyState.target = nil
+			LobbyState.mode = nil
+			LobbyState.countText = "-"
+		else
+			pcall(LobbyStep)
+		end
+	end
+end)
+
+--========================================================--
+-- UI (和主脚本同风格): 每组各自设置偏移距离, 右侧可拖动小按钮开关
+--========================================================--
+
+--========================================================--
+-- JUJUTSU HIGH (Workspace.Map.JujutsuHigh, Stage 1 普通关)
+--  用主脚本的放塔 / 升级逻辑: 2x Miracle 升到 Lv4 -> 之后疯狂放所有能放的塔 + 升级所有塔
+--  不识别塔阵容: 不管有没有带, 全部尝试放 (放不了的自动退避); 农场塔只放 Equipped5 对应的那一个
+--  同时带主脚本的 AutoSkip / King 领域 / 蜗牛暂停升级 / Wave 50 卖塔
+--========================================================--
+
+local JJH = { phaseDone = false, stopAll = false, upgradeBlocked = false, autoSkip = false }
+
+local JJH_TOWERS = {
+	BASIC = "MiracleSorcerer", HARVESTER = "HarvesterCurse", B85 = "KingOfCursesFrost",
+	GOJO = "StrongestSorcererEvo", KING = "KingOfCursesEvo", STRONGEST = "StrongestSorcerer",
+	TREE = "TreeOfLife", FROST = "FrostBlossom", PINATA = "Pinata", KOGANE = "Kogane", CHEAP = "SorcererAgent",
+}
+local JJH_FARM = { TREE = true, FROST = true, PINATA = true, KOGANE = true, CHEAP = true }
+local JJH_TARGET = {
+	BASIC = 2, HARVESTER = 1, KING = 1, GOJO = 1, TREE = 1, FROST = 1, PINATA = 1,
+	KOGANE = 1, STRONGEST = 1, B85 = 1, CHEAP = 4,
+}
+-- 放置顺序: Miracle 先 (阶段 1), 之后全部
+local JJH_ORDER = { "BASIC", "HARVESTER", "B85", "GOJO", "KING", "STRONGEST", "TREE", "FROST", "PINATA", "KOGANE", "CHEAP" }
+
+-- 位置 (来自主脚本 JujutsuHigh): 农场塔和 Starter 同一坐标
+local JJH_BASIC_POS = CFrame.new(-44.38, 16.86, -83.57)
+local JJH_MAIN_POS = JJH_BASIC_POS
+local JJH_POS = {
+	BASIC = JJH_BASIC_POS, HARVESTER = JJH_BASIC_POS, TREE = JJH_BASIC_POS, PINATA = JJH_BASIC_POS,
+	FROST = JJH_BASIC_POS, CHEAP = JJH_BASIC_POS, KOGANE = JJH_BASIC_POS,
+	B85 = JJH_MAIN_POS, GOJO = JJH_MAIN_POS, KING = JJH_MAIN_POS, STRONGEST = JJH_MAIN_POS,
+}
+
+local function IsJujutsuHigh()
+	local map = Workspace:FindFirstChild("Map")
+	return map ~= nil and map:FindFirstChild("JujutsuHigh") ~= nil
+end
+
+local function JJHTowers(name)
+	local folder = Workspace:FindFirstChild("Towers")
+	local result = {}
+	if not folder then return result end
+	for _, t in ipairs(folder:GetChildren()) do
+		if NameMatches(t.Name, name) then table.insert(result, t) end
+	end
+	return result
+end
+
+local function JJHLevel(tower)
+	local attr = tower:GetAttribute("Level")
+	if typeof(attr) == "number" then return attr end
+	local lv = tower:FindFirstChild("Level") or tower:FindFirstChild("level")
+	if lv and tonumber(lv.Value) then return tonumber(lv.Value) end
+	return tonumber(string.match(tower.Name, "%d+")) or 1
+end
+
+local function JJHFarmUUID()
+	local v = LocalPlayer:FindFirstChild("Equipped5")
+	local val = v and v.Value
+	if type(val) == "string" and val ~= "" then return val end
+	return nil
+end
+
+-- 从 GetAllData 按名字取 uuid (不看有没有带); 农场塔里确定是哪一个 (Equipped5 对应的)
+local jjhUUID, jjhFarmKey, jjhLoaded, jjhLast = {}, nil, false, 0
+
+local function JJHRefresh()
+	if tick() - jjhLast < 3 then return end
+	jjhLast = tick()
+
+	local ok, data = pcall(function() return GetAllData:InvokeServer() end)
+	if not ok or type(data) ~= "table" or type(data.Towers) ~= "table" then return end
+
+	local farmUUID = JJHFarmUUID()
+	local newUUID, newEq, farmKey = {}, {}, nil
+
+	for _, t in pairs(data.Towers) do
+		if type(t) == "table" and t.Name and t.UUID then
+			for key, base in pairs(JJH_TOWERS) do
+				if NameMatches(t.Name, base) then
+					local eq = t.Equipped == true
+					if not newUUID[key] or (eq and not newEq[key]) then
+						newUUID[key] = t.UUID
+						newEq[key] = eq
+					end
+					if JJH_FARM[key] then
+						if t.UUID == farmUUID then
+							farmKey = key
+						elseif eq and not farmKey then
+							farmKey = key
+						end
+					end
+				end
+			end
+		end
+	end
+
+	jjhUUID, jjhFarmKey, jjhLoaded = newUUID, farmKey, true
+end
+
+task.spawn(function()
+	while task.wait(1) do
+		if IsJujutsuHigh() then pcall(JJHRefresh) end
+	end
+end)
+
+local jjhLastTry, jjhFails = {}, {}
+
+local function JJHPlace(key)
+	if JJH.stopAll or not jjhLoaded then return false end
+
+	local towerName = JJH_TOWERS[key]
+	if JJH_FARM[key] and key ~= jjhFarmKey then return false end
+
+	-- Gojo 要等 King 先放下 (King 有 uuid 才等)
+	if key == "GOJO" and jjhUUID.KING and #JJHTowers(JJH_TOWERS.KING) == 0 then return false end
+
+	if #JJHTowers(towerName) >= (JJH_TARGET[key] or 1) then return false end
+
+	-- 放不了的 (没带 / 钱不够) 连续失败多次后退避
+	local interval = ((jjhFails[key] or 0) >= 5) and 5 or 0.5
+	if tick() - (jjhLastTry[key] or 0) < interval then return false end
+	jjhLastTry[key] = tick()
+
+	local uuid = JJH_FARM[key] and JJHFarmUUID() or jjhUUID[key]
+	local pos = JJH_POS[key]
+	if not uuid or not pos then return false end
+
+	local ok, ret
+	if key == "KOGANE" then
+		local king = JJHTowers(JJH_TOWERS.KING)[1]
+		if not king then return false end
+		ok, ret = pcall(function() return SpawnNewTower:InvokeServer(uuid, pos, king) end)
+	else
+		ok, ret = pcall(function() return SpawnNewTower:InvokeServer(uuid, pos) end)
+	end
+
+	if ok and ret then
+		jjhFails[key] = 0
+		return true
+	end
+	jjhFails[key] = (jjhFails[key] or 0) + 1
+	return false
+end
+
+-- 放塔主循环
+task.spawn(function()
+	while task.wait(0.1) do
+		pcall(function()
+			if not IsJujutsuHigh() or JJH.stopAll or not jjhLoaded then return end
+
+			if not JJH.phaseDone then
+				-- 没有 Miracle 可放就直接跳过阶段 1
+				if not jjhUUID.BASIC then
+					JJH.phaseDone = true
+					return
+				end
+				if #JJHTowers(JJH_TOWERS.BASIC) < 2 then
+					JJHPlace("BASIC")
+				end
+				return
+			end
+
+			for _, key in ipairs(JJH_ORDER) do
+				if JJH.stopAll then break end
+				JJHPlace(key)
+				task.wait(0.03)
+			end
+		end)
+	end
+end)
+
+-- 升级循环
+task.spawn(function()
+	while task.wait(0.3) do
+		pcall(function()
+			if not IsJujutsuHigh() or JJH.stopAll then return end
+
+			local folder = Workspace:FindFirstChild("Towers")
+			if not folder then return end
+
+			local miracles = JJHTowers(JJH_TOWERS.BASIC)
+
+			-- 阶段 1: 2 个 Miracle 升到 Lv4
+			if not JJH.phaseDone then
+				if #miracles < 2 then return end
+				table.sort(miracles, function(a, b) return JJHLevel(a) < JJHLevel(b) end)
+				for _, tower in ipairs(miracles) do
+					if JJHLevel(tower) < 4 then
+						pcall(function() UpgradeTower:InvokeServer(tower) end)
+						return
+					end
+				end
+				JJH.phaseDone = true
+				print("[JujutsuHigh] Miracle 阶段完成")
+				return
+			end
+
+			-- 之后: 升级所有塔 (Miracle 到 4 级为止)
+			for _, tower in ipairs(folder:GetChildren()) do
+				local isBasic = NameMatches(tower.Name, JJH_TOWERS.BASIC)
+				if (not isBasic) or JJHLevel(tower) < 4 then
+					local affected = NameMatches(tower.Name, JJH_TOWERS.B85)
+						or NameMatches(tower.Name, JJH_TOWERS.GOJO)
+						or NameMatches(tower.Name, JJH_TOWERS.KING)
+						or NameMatches(tower.Name, JJH_TOWERS.HARVESTER)
+						or NameMatches(tower.Name, JJH_TOWERS.TREE)
+						or NameMatches(tower.Name, JJH_TOWERS.KOGANE)
+					if not (JJH.upgradeBlocked and affected) then
+						pcall(function() UpgradeTower:InvokeServer(tower) end)
+					end
+				end
+			end
+		end)
+	end
+end)
+
+-- 蜗牛: 有 ImmortalSnail 时暂停升级部分塔
+task.spawn(function()
+	while task.wait(0.5) do
+		if IsJujutsuHigh() then
+			pcall(function()
+				local mobs = Workspace:FindFirstChild("Mobs")
+				JJH.upgradeBlocked = (mobs and mobs:FindFirstChild("ImmortalSnail")) ~= nil
+			end)
+		end
+	end
+end)
+
+-- AutoSkip (每局一次)
+task.spawn(function()
+	while task.wait(1) do
+		if IsJujutsuHigh() and not JJH.autoSkip then
+			pcall(function()
+				ReplicatedStorage.Remotes.AutoSkip:FireServer()
+				JJH.autoSkip = true
+				print("[JujutsuHigh] AutoSkip 已调用")
+			end)
+		end
+	end
+end)
+
+-- King 领域 (无编号 + 2~8)
+task.spawn(function()
+	local domain
+	while task.wait(2) do
+		if IsJujutsuHigh() and not JJH.stopAll then
+			pcall(function()
+				if not domain then
+					local r = ReplicatedStorage:FindFirstChild("Remotes")
+					r = r and r:FindFirstChild("Towers")
+					r = r and r:FindFirstChild("KingOfCursesEvo")
+					domain = r and r:FindFirstChild("DomainActive")
+				end
+				if not domain then return end
+
+				local folder = Workspace:FindFirstChild("Towers")
+				if not folder then return end
+				local base = JJH_TOWERS.KING
+				local t = folder:FindFirstChild(base)
+				if t then pcall(function() domain:FireServer(t) end) end
+				for i = 2, 8 do
+					local ti = folder:FindFirstChild(base .. i)
+					if ti then pcall(function() domain:FireServer(ti) end) end
+				end
+			end)
+		end
+	end
+end)
+
+-- Wave 50: 停止并卖掉所有塔
+task.spawn(function()
+	while task.wait(0.5) do
+		if IsJujutsuHigh() then
+			pcall(function()
+				local info = Workspace:FindFirstChild("Info")
+				local wave = info and info:FindFirstChild("Wave")
+				if not wave then return end
+
+				if wave.Value >= 50 and not JJH.stopAll then
+					JJH.stopAll = true
+					print("[JujutsuHigh] Wave >= 50, 停止并卖塔")
+				end
+
+				if JJH.stopAll then
+					local folder = Workspace:FindFirstChild("Towers")
+					if folder then
+						for _, t in ipairs(folder:GetChildren()) do
+							pcall(function() SellTower:InvokeServer(t) end)
+							task.wait(0.01)
+						end
+					end
+				end
+			end)
+		end
+	end
+end)
+
+-- 进了 JujutsuHigh 后如果服务器里有别人 -> leave 回大厅 (持续 2 秒才算, 避免刚加载时误判)
+task.spawn(function()
+	local since = nil
+	while task.wait(0.5) do
+		if IsJujutsuHigh() and IsGameReady() and #Players:GetPlayers() > 1 then
+			since = since or tick()
+			if tick() - since >= 2 then
+				LobbyState.status = "有别人, leave"
+				print("[JujutsuHigh] 有其他玩家, leave")
+				task.spawn(CallLeave)
+				task.wait(1)
+			end
+		else
+			since = nil
+		end
+	end
+end)
+
+-- 离开 JujutsuHigh 后重置 (下一局重新开始)
+task.spawn(function()
+	while task.wait(1) do
+		if not IsJujutsuHigh() then
+			JJH.phaseDone, JJH.stopAll, JJH.upgradeBlocked, JJH.autoSkip = false, false, false, false
+			jjhFails, jjhLastTry = {}, {}
+		end
+	end
+end)
+
+local uiOk, uiErr = pcall(function()
+	local TweenService = game:GetService("TweenService")
+	local UserInputService = game:GetService("UserInputService")
+
+	local COLORS = {
+		bg      = Color3.fromRGB(11, 11, 15),
+		surface = Color3.fromRGB(18, 18, 24),
+		tile    = Color3.fromRGB(24, 24, 32),
+		line    = Color3.fromRGB(38, 38, 50),
+		text    = Color3.fromRGB(240, 240, 246),
+		sub     = Color3.fromRGB(128, 128, 148),
+		dim     = Color3.fromRGB(82, 82, 100),
+		green   = Color3.fromRGB(52, 211, 153),
+		amber   = Color3.fromRGB(251, 191, 36),
+		gray    = Color3.fromRGB(100, 100, 120),
+		accent  = Color3.fromRGB(139, 128, 255),
+	}
+
+	local function New(class, props, parent)
+		local obj = Instance.new(class)
+		for k, v in pairs(props) do obj[k] = v end
+		if parent then obj.Parent = parent end
+		return obj
+	end
+
+	local function Corner(parent, r) return New("UICorner", { CornerRadius = UDim.new(0, r) }, parent) end
+
+	local function Stroke(parent, color, thickness, transparency)
+		return New("UIStroke", {
+			Color = color, Thickness = thickness or 1, Transparency = transparency or 0,
+			ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+		}, parent)
+	end
+
+	local function Label(parent, text, size, color, font, xalign)
+		return New("TextLabel", {
+			BackgroundTransparency = 1, Text = text, TextSize = size, TextColor3 = color,
+			Font = font or Enum.Font.GothamMedium,
+			TextXAlignment = xalign or Enum.TextXAlignment.Left,
+			TextYAlignment = Enum.TextYAlignment.Center,
+		}, parent)
+	end
+
+	local function Tween(obj, props, t)
+		pcall(function()
+			TweenService:Create(obj, TweenInfo.new(t or 0.25, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), props):Play()
+		end)
+	end
+
+	local function GetGuiParent()
+		local ok, g = pcall(function() return gethui and gethui() end)
+		if ok and g then return g end
+		ok, g = pcall(function() return game:GetService("CoreGui") end)
+		if ok and g then return g end
+		return LocalPlayer:WaitForChild("PlayerGui")
+	end
+
+	pcall(function()
+		local old = GetGuiParent():FindFirstChild("PinataStarterUI")
+		if old then old:Destroy() end
+	end)
+
+	local Gui = New("ScreenGui", {
+		Name = "PinataStarterUI", ResetOnSpawn = false,
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling, DisplayOrder = 999, IgnoreGuiInset = true,
+	})
+	Gui.Parent = GetGuiParent()
+
+	local MAIN_W, FULL_H, HEADER_H = 360, 560, 64
+
+	local Main = New("Frame", {
+		Name = "Main", Size = UDim2.new(0, MAIN_W, 0, FULL_H),
+		Position = UDim2.new(0, 24, 0.5, -FULL_H / 2),
+		BackgroundColor3 = COLORS.bg, BorderSizePixel = 0, ClipsDescendants = true,
+	}, Gui)
+	Corner(Main, 18)
+	Stroke(Main, COLORS.line, 1, 0.1)
+
+	-- Header
+	local Header = New("Frame", { Size = UDim2.new(1, 0, 0, HEADER_H), BackgroundTransparency = 1 }, Main)
+
+	local Mark = New("Frame", {
+		Size = UDim2.new(0, 32, 0, 32), Position = UDim2.new(0, 18, 0.5, -16),
+		BackgroundColor3 = COLORS.accent, BackgroundTransparency = 0.86, BorderSizePixel = 0,
+	}, Header)
+	Corner(Mark, 10)
+	Stroke(Mark, COLORS.accent, 1, 0.6)
+	local MarkText = Label(Mark, "P", 15, COLORS.accent, Enum.Font.GothamBold, Enum.TextXAlignment.Center)
+	MarkText.Size = UDim2.new(1, 0, 1, 0)
+
+	local Title = Label(Header, "Pinata Starter", 16, COLORS.text, Enum.Font.GothamBold)
+	Title.Size = UDim2.new(0, 200, 0, 20)
+	Title.Position = UDim2.new(0, 62, 0, 13)
+
+	local SubTitle = Label(Header, "lobby · track pinata · place · upgrade", 11, COLORS.sub, Enum.Font.Gotham)
+	SubTitle.Size = UDim2.new(0, 240, 0, 14)
+	SubTitle.Position = UDim2.new(0, 62, 0, 34)
+
+	local StateBadge = Label(Header, "WAIT", 11, COLORS.gray, Enum.Font.GothamBold, Enum.TextXAlignment.Center)
+	StateBadge.AnchorPoint = Vector2.new(1, 0.5)
+	StateBadge.Position = UDim2.new(1, -18, 0.5, 0)
+	StateBadge.Size = UDim2.new(0, 84, 0, 24)
+	StateBadge.BackgroundColor3 = COLORS.gray
+	StateBadge.BackgroundTransparency = 0.88
+	Corner(StateBadge, 12)
+
+	New("Frame", {
+		Size = UDim2.new(1, -36, 0, 1), Position = UDim2.new(0, 18, 0, HEADER_H),
+		BackgroundColor3 = COLORS.line, BackgroundTransparency = 0.35, BorderSizePixel = 0,
+	}, Main)
+
+	-- Body
+	local Body = New("Frame", {
+		Size = UDim2.new(1, -32, 1, -(HEADER_H + 24)), Position = UDim2.new(0, 16, 0, HEADER_H + 14),
+		BackgroundTransparency = 1,
+	}, Main)
+	New("UIListLayout", { Padding = UDim.new(0, 12), SortOrder = Enum.SortOrder.LayoutOrder }, Body)
+
+	local function BuildOffsetCard(g, order)
+		local card = New("Frame", {
+			Size = UDim2.new(1, 0, 0, 96), BackgroundColor3 = COLORS.surface, BorderSizePixel = 0, LayoutOrder = order,
+		}, Body)
+		Corner(card, 14)
+		Stroke(card, COLORS.line, 1, 0.25)
+
+		local t = Label(card, g.title, 12, COLORS.text, Enum.Font.GothamBold)
+		t.Position = UDim2.new(0, 14, 0, 12)
+		t.Size = UDim2.new(0, 80, 0, 18)
+		local st = Label(card, g.sub, 11, COLORS.dim, Enum.Font.Gotham)
+		st.Position = UDim2.new(0, 14, 0, 31)
+		st.Size = UDim2.new(1, -130, 0, 16)
+		st.TextTruncate = Enum.TextTruncate.AtEnd
+
+		local box = New("TextBox", {
+			AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -14, 0, 10),
+			Size = UDim2.new(0, 96, 0, 28), BackgroundColor3 = COLORS.tile, BorderSizePixel = 0,
+			Text = tostring(g.offset), PlaceholderText = "0", TextColor3 = COLORS.text,
+			PlaceholderColor3 = COLORS.dim, TextSize = 14, Font = Enum.Font.GothamBold,
+			ClearTextOnFocus = false,
+		}, card)
+		Corner(box, 8)
+		local boxStroke = Stroke(box, COLORS.line, 1, 0.2)
+
+		local function SetOffset(n)
+			if n ~= g.offset then
+				g.offset = n
+				g.reanchor = true
+			end
+			box.Text = tostring(g.offset)
+		end
+
+		local function StepButton(text, x, delta)
+			local b = New("TextButton", {
+				Position = UDim2.new(0, x, 0, 56), Size = UDim2.new(0, 46, 0, 24),
+				BackgroundColor3 = COLORS.tile, BorderSizePixel = 0, Text = text,
+				TextColor3 = COLORS.sub, TextSize = 11, Font = Enum.Font.GothamBold, AutoButtonColor = false,
+			}, card)
+			Corner(b, 7)
+			b.MouseEnter:Connect(function() Tween(b, { TextColor3 = COLORS.text }, 0.12) end)
+			b.MouseLeave:Connect(function() Tween(b, { TextColor3 = COLORS.sub }, 0.12) end)
+			b.MouseButton1Click:Connect(function() SetOffset(g.offset + delta) end)
+		end
+		StepButton("-10", 14, -10)
+		StepButton("-1", 66, -1)
+		StepButton("+1", 118, 1)
+		StepButton("+10", 170, 10)
+
+		box.Focused:Connect(function() Tween(boxStroke, { Color = COLORS.accent }, 0.15) end)
+		box.FocusLost:Connect(function()
+			local n = tonumber(box.Text)
+			SetOffset(n or g.offset)
+			Tween(boxStroke, { Color = COLORS.line }, 0.15)
+		end)
+	end
+
+	for i, g in ipairs(GROUPS) do
+		BuildOffsetCard(g, i)
+	end
+
+	-- 状态卡片
+	local StatCard = New("Frame", {
+		Size = UDim2.new(1, 0, 0, 216), BackgroundColor3 = COLORS.surface, BorderSizePixel = 0, LayoutOrder = 10,
+	}, Body)
+	Corner(StatCard, 14)
+	Stroke(StatCard, COLORS.line, 1, 0.25)
+
+	local function Row(y, caption)
+		local c = Label(StatCard, caption, 11, COLORS.sub, Enum.Font.GothamMedium)
+		c.Position = UDim2.new(0, 14, 0, y)
+		c.Size = UDim2.new(0, 110, 0, 18)
+		local v = Label(StatCard, "-", 13, COLORS.text, Enum.Font.GothamBold, Enum.TextXAlignment.Right)
+		v.AnchorPoint = Vector2.new(1, 0)
+		v.Position = UDim2.new(1, -14, 0, y)
+		v.Size = UDim2.new(1, -130, 0, 18)
+		v.TextTruncate = Enum.TextTruncate.AtEnd
+		return v
+	end
+
+	local VPinata = Row(12, "PINATA X")
+	local VStarterGap = Row(36, "Starter 距删除")
+	local VMegunaGap = Row(60, "Meguna 距删除")
+	local VStarterCount = Row(84, "场上 Starter")
+	local VMegunaCount = Row(108, "场上 Meguna 组")
+	local VUuid = Row(132, "可放的塔")
+	local VNext = Row(156, "下次 Pinata")
+	local VLobby = Row(180, "大厅状态")
+
+	local function GapText(g, px)
+		if px and g.anchor then
+			-- 还差多少格 Pinata 就越过塔足够远, 到 0 就会删掉重放
+			local remaining = Margin(g) + (g.anchor.X - px) * Dir(g)
+			return string.format("%.1f", remaining), remaining <= 3 and COLORS.amber or COLORS.text
+		end
+		return "-", COLORS.text
+	end
+
+	local function Refresh()
+		local px = lastPinataX
+		VPinata.Text = px and string.format("%.1f", px) or "-"
+
+		VStarterGap.Text, VStarterGap.TextColor3 = GapText(GROUPS[1], px)
+		VMegunaGap.Text, VMegunaGap.TextColor3 = GapText(GROUPS[2], px)
+
+		VStarterCount.Text = tostring(#GetGroupTowers(GROUPS[1]))
+		VMegunaCount.Text = tostring(#GetGroupTowers(GROUPS[2]))
+
+		local usable, total = 0, 0
+		for _, g in ipairs(GROUPS) do
+			for _, base in ipairs(g.towers) do
+				total = total + 1
+				if uuidByName[base] then usable = usable + 1 end
+			end
+		end
+		VUuid.Text = usable .. " / " .. total
+
+		-- 下次 Pinata
+		local want, ev = WantPinata()
+		local _, _, secs = EventInfo()
+		if want then
+			VNext.Text = secs > 0 and string.format("%d:%02d 后开始", math.floor(secs / 60), secs % 60) or "窗口内"
+			VNext.TextColor3 = COLORS.amber
+		else
+			local untilPrep = (ev + 3600 - PREP_SECONDS) - os.time()
+			if GetDone() ~= ev and (os.time() - ev) > AFTER_SECONDS then
+				-- 当前小时的窗口已过, 下一次在下个整点
+				VNext.Text = string.format("%d 分后准备", math.max(0, math.floor(((ev + 3600 - PREP_SECONDS) - os.time()) / 60)))
+			else
+				VNext.Text = string.format("%d 分后准备", math.max(0, math.floor(untilPrep / 60)))
+			end
+			VNext.TextColor3 = COLORS.text
+		end
+
+		VLobby.Text = LobbyState.status .. (LobbyState.countText ~= "-" and (" · " .. LobbyState.countText) or "")
+
+		local badge, color
+		if IsPinataMap() then
+			if not px then
+				badge, color = "NO PINATA", COLORS.gray
+			elseif GROUPS[1].selling or GROUPS[2].selling then
+				badge, color = "RESET", COLORS.amber
+			else
+				badge, color = "ACTIVE", COLORS.green
+			end
+		elseif IsInGame() then
+			badge, color = IsJujutsuHigh() and "JUJUTSU" or "OTHER MAP", IsJujutsuHigh() and COLORS.green or COLORS.gray
+		else
+			badge = want and "→ PINATA" or "LOBBY"
+			color = want and COLORS.amber or COLORS.accent
+		end
+		StateBadge.Text = badge
+		Tween(StateBadge, { TextColor3 = color, BackgroundColor3 = color })
+	end
+
+	task.spawn(function()
+		while task.wait(0.1) do
+			pcall(Refresh)
+		end
+	end)
+
+	-- 拖动
+	do
+		local dragging, dragStart, startPos
+		Header.InputBegan:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+				dragging = true
+				dragStart = input.Position
+				startPos = Main.Position
+				input.Changed:Connect(function()
+					if input.UserInputState == Enum.UserInputState.End then dragging = false end
+				end)
+			end
+		end)
+		UserInputService.InputChanged:Connect(function(input)
+			if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+				local d = input.Position - dragStart
+				Main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
+			end
+		end)
+	end
+
+	-- 右侧可拖动小按钮, 点击开关 UI
+	local ToggleBtn = New("TextButton", {
+		Name = "ToggleBtn", Size = UDim2.new(0, 46, 0, 46), Position = UDim2.new(1, -72, 0.5, -23),
+		BackgroundColor3 = COLORS.bg, Text = "PS", TextColor3 = COLORS.text, TextSize = 13,
+		Font = Enum.Font.GothamBold, AutoButtonColor = false, ZIndex = 50,
+	}, Gui)
+	Corner(ToggleBtn, 23)
+	local ToggleStroke = Stroke(ToggleBtn, COLORS.accent, 1.5, 0.35)
+	ToggleBtn.MouseEnter:Connect(function() Tween(ToggleStroke, { Transparency = 0 }, 0.15) end)
+	ToggleBtn.MouseLeave:Connect(function() Tween(ToggleStroke, { Transparency = 0.35 }, 0.15) end)
+
+	local function SetUiVisible(v)
+		Main.Visible = v
+		Tween(ToggleBtn, { BackgroundColor3 = v and COLORS.bg or COLORS.surface }, 0.2)
+	end
+
+	do
+		local pressing, moved = false, false
+		local pressPos, btnStart
+
+		ToggleBtn.InputBegan:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+				pressing = true
+				moved = false
+				pressPos = input.Position
+				btnStart = ToggleBtn.Position
+				input.Changed:Connect(function()
+					if input.UserInputState == Enum.UserInputState.End then
+						pressing = false
+						if not moved then SetUiVisible(not Main.Visible) end
+					end
+				end)
+			end
+		end)
+
+		UserInputService.InputChanged:Connect(function(input)
+			if pressing and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+				local d = input.Position - pressPos
+				if d.Magnitude > 6 then moved = true end
+				if moved then
+					ToggleBtn.Position = UDim2.new(btnStart.X.Scale, btnStart.X.Offset + d.X, btnStart.Y.Scale, btnStart.Y.Offset + d.Y)
+				end
+			end
+		end)
+	end
+
+	UserInputService.InputBegan:Connect(function(input, processed)
+		if processed then return end
+		if input.KeyCode == Enum.KeyCode.RightControl then
+			SetUiVisible(not Main.Visible)
+		end
+	end)
+end)
+
+if not uiOk then
+	warn("[PinataStarter] UI 加载失败, 其余功能照常运行: " .. tostring(uiErr))
+end
+
+print("[PinataStarter] 已启动 · RightControl / 右侧小按钮 显示隐藏 UI")
