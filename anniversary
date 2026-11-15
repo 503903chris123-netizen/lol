@@ -1,10 +1,11 @@
 --========================================================--
 -- PINATA STARTER (含大厅自动进传送器)
 --  局内 (Map 是 Anniversary / 场上有 Pinata): 跟着 Workspace.Mobs.Pinata 放塔 / 升级 / 开领域
---    Starter (Miracle / Harvester): 一开始放在固定位置 (117.65, 0.86, -121.48); Pinata 的 X 小于等于这个 X 后,
+--    Starter (Miracle / Harvester): 一开始放在固定位置; Pinata 的 X 小于等于这个 X 后,
 --                                   删掉, 改成放在 Pinata 的 X - 20, 之后 Pinata 越过塔 20 格再删掉重放
 --    Meguna  (King / Kogane / Amplifying): 放在 Pinata 的 X - 80, Pinata 越过塔 80 格再删掉重放
 --    KingOfCursesEvo (Meguna) 到 3 级后不再开领域, 其他塔照常开
+--    Kogane: 场上数量是 0 就一直循环放置, 放上去才停
 --  局外 (大厅):
 --    整点前 5 分钟 (到整点后 3 分钟) 且这一小时还没打过 Pinata -> 走路去 Workspace.PinataTeleporters 里
 --      人数 < 10 的传送器, 长按互动键进入; 满人就换另一个
@@ -288,6 +289,17 @@ local function GetGroupTowers(g)
 	return list
 end
 
+-- 场上某个塔名的数量
+local function CountTower(base)
+	local n = 0
+	local towers = Workspace:FindFirstChild("Towers")
+	if not towers then return 0 end
+	for _, t in ipairs(towers:GetChildren()) do
+		if InstMatches(t.Name, base) then n = n + 1 end
+	end
+	return n
+end
+
 -- 离放塔点够近才放 (不够近时, 下面的走路循环会先走过去)
 local function IsNearPos(pos)
 	local char = LocalPlayer.Character
@@ -311,16 +323,30 @@ local function StartPlacer(g, base)
 	end
 
 	task.spawn(function()
+		local lastWarn = 0
 		while true do
 			local pos = g.anchor
 			if pos and not g.selling and IsPinataMap() and IsNearPos(pos) then
 				if base == "Kogane" then
-					-- Kogane: GetAllData 拿不到就用固定 uuid; 要先有 KingOfCursesEvo, 绑定它
-					local uuid = uuidByName[base] or KOGANE_UUID
-					local king = Workspace:FindFirstChild("Towers")
-					king = king and king:FindFirstChild(MEGUNA_NAME)
-					if king then
-						pcall(function() SpawnNewTower:InvokeServer(uuid, CFrame.new(pos) * KOGANE_ANGLES, king) end)
+					-- Kogane: 场上数量是 0 就一直循环放, 放上去 (数量 > 0) 才退出这个内层循环
+					-- GetAllData 拿不到 uuid 就用固定 uuid; 要先有 KingOfCursesEvo, 绑定它
+					while CountTower("Kogane") == 0
+						and g.anchor == pos and not g.selling
+						and IsPinataMap() and IsNearPos(pos) do
+
+						local uuid = uuidByName[base] or KOGANE_UUID
+						local towers = Workspace:FindFirstChild("Towers")
+						local king = towers and towers:FindFirstChild(MEGUNA_NAME)
+						if king then
+							local ok, ret = pcall(function()
+								return SpawnNewTower:InvokeServer(uuid, CFrame.new(pos) * KOGANE_ANGLES, king)
+							end)
+							if not (ok and ret) and tick() - lastWarn > 1 then
+								lastWarn = tick()
+								warn("[Kogane] 放置失败", ok, ret)
+							end
+						end
+						task.wait(PLACE_DELAY)
 					end
 				else
 					local uuid = uuidByName[base]
@@ -904,8 +930,8 @@ local function TeleportInto(elev)
 	local okPivot, pivot = pcall(function() return elev:GetPivot() end)
 	if not okPivot or not pivot then return false end
 
+	-- 不先 TP 过去, 直接从当前位置开始绕圈 (第一步 tween 就会把人带到传送器旁)
 	local center = pivot.Position + Vector3.new(0, 3, 0)
-	pcall(function() root.CFrame = CFrame.new(center) end)
 
 	for i = 1, CIRCLE_STEPS do
 		if IsInGame() then return true end
@@ -1023,10 +1049,6 @@ task.spawn(function()
 		end
 	end
 end)
-
---========================================================--
--- UI (和主脚本同风格): 每组各自设置偏移距离, 右侧可拖动小按钮开关
---========================================================--
 
 --========================================================--
 -- JUJUTSU HIGH (Workspace.Map.JujutsuHigh, Stage 1 普通关)
@@ -1351,6 +1373,10 @@ task.spawn(function()
 		end
 	end
 end)
+
+--========================================================--
+-- UI (和主脚本同风格): 每组各自设置偏移距离, 右侧可拖动小按钮开关
+--========================================================--
 
 local uiOk, uiErr = pcall(function()
 	local TweenService = game:GetService("TweenService")
