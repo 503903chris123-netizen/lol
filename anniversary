@@ -1,3 +1,4 @@
+
 --========================================================--
 -- PINATA STARTER (含大厅自动进传送器)
 --  局内 (Map 是 Anniversary / 场上有 Pinata): 跟着 Workspace.Mobs.Pinata 放塔 / 升级 / 开领域
@@ -979,18 +980,15 @@ local function NormalLobby()
 	if not ok or not pivot then LobbyState.status = "找不到传送器位置" return end
 	local pos = pivot.Position
 
-	-- Teleporter1 直接 TP 进去 (不走路)
-	if (root.Position - pos).Magnitude > 6 then
-		LobbyState.status = "传送到 " .. elev.Name .. " · 绕圈"
-		TeleportInto(elev)
-		task.wait(0.8)  -- 等人数刷新
-	end
-
 	-- 刚离开过 (里面有别人): 冷却一会再回来
 	if tick() < (LobbyState.leaveUntil or 0) then
 		LobbyState.status = "有人, 等待后重试"
 		return
 	end
+
+	-- 目标是 Teleporter1: 时刻绕圈 (每次循环都绕一整圈, 不管离得远不远)
+	LobbyState.status = "绕圈 · " .. elev.Name
+	TeleportInto(elev)
 
 	-- 进去之后如果有别人 (人数 > 1, 含自己) -> leave
 	local cur = ReadCount(elev)
