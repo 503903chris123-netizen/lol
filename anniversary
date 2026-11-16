@@ -1258,42 +1258,45 @@ end)
 local JJH = { phaseDone = false, stopAll = false, upgradeBlocked = false, autoSkip = false }
 
 local JJH_TOWERS = {
-	BASIC = "MiracleSorcerer", HARVESTER = "HarvesterCurse", B85 = "KingOfCursesFrost",
-	GOJO = "StrongestSorcererEvo", KING = "KingOfCursesEvo", STRONGEST = "StrongestSorcerer",
-	TREE = "TreeOfLife", FROST = "FrostBlossom", PINATA = "Pinata", KOGANE = "Kogane", CHEAP = "SorcererAgent",
+	BASIC = "MiracleSorcerer", HARVESTER = "HarvesterCurse", MEGUNA = "KingOfCursesEvo",
+	AMPLIFYING = "AmplifyingSorcerer", KOGANE = "Kogane",
 }
 local JJH_NAMES = {
-	BASIC = "Miracle", HARVESTER = "Harvester", B85 = "KingOfCurses Frost",
-	GOJO = "StrongestSorcerer Evo", KING = "KingOfCurses Evo", STRONGEST = "StrongestSorcerer",
-	TREE = "TreeOfLife", FROST = "FrostBlossom", PINATA = "Pinata", KOGANE = "Kogane", CHEAP = "SorcererAgent",
+	BASIC = "Miracle", HARVESTER = "Harvester", MEGUNA = "Meguna",
+	AMPLIFYING = "Amplifying", KOGANE = "Kogane",
 }
-local JJH_FARM = { TREE = true, FROST = true, PINATA = true, KOGANE = true, CHEAP = true }
-local JJH_TARGET = {
-	BASIC = 2, HARVESTER = 1, KING = 1, GOJO = 1, TREE = 1, FROST = 1, PINATA = 1,
-	KOGANE = 1, STRONGEST = 1, B85 = 1, CHEAP = 4,
-}
--- 放置顺序: Miracle 先 (阶段 1), 之后全部
-local JJH_ORDER = { "BASIC", "HARVESTER", "B85", "GOJO", "KING", "STRONGEST", "TREE", "FROST", "PINATA", "KOGANE", "CHEAP" }
+local JJH_FARM = {}   -- 新塔里没有 Equipped5 农场塔的概念
+local JJH_TARGET = { BASIC = 2, HARVESTER = 1, MEGUNA = 1, AMPLIFYING = 1, KOGANE = 1 }
+-- 放置顺序: Miracle 先 (阶段 1), 之后全部; Kogane 要等 Meguna 先放下
+local JJH_ORDER = { "BASIC", "HARVESTER", "MEGUNA", "AMPLIFYING", "KOGANE" }
 
 -- 位置: 所有塔放同一坐标
-local JJH_BASIC_POS = CFrame.new(-44.38, 16.86, -83.57)
-local JJH_MAIN_POS = JJH_BASIC_POS
-local JJH_POS = {
-	BASIC = JJH_BASIC_POS, HARVESTER = JJH_BASIC_POS, TREE = JJH_BASIC_POS, PINATA = JJH_BASIC_POS,
-	FROST = JJH_BASIC_POS, CHEAP = JJH_BASIC_POS, KOGANE = JJH_BASIC_POS,
-	B85 = JJH_MAIN_POS, GOJO = JJH_MAIN_POS, KING = JJH_MAIN_POS, STRONGEST = JJH_MAIN_POS,
-}
+local JJH_POS_CF = CFrame.new(-44.38, 16.86, -83.57)
+local JJH_POS = {}
+for key in pairs(JJH_TOWERS) do JJH_POS[key] = JJH_POS_CF end
 
 local function IsJujutsuHigh()
 	local map = Workspace:FindFirstChild("Map")
 	return map ~= nil and map:FindFirstChild("JujutsuHigh") ~= nil
 end
 
--- 自己的、名字匹配的塔 (来自列表)
-local function JJHTowers(name)
+-- 塔名匹配: Amplifying 名字里带 "amplif"; Meguna 认 KingOfCursesEvo 或 meguna 开头
+local function JJHMatch(key, instName)
+	local n = string.lower(tostring(instName))
+	if key == "AMPLIFYING" then
+		return string.find(n, "amplif", 1, true) ~= nil
+	end
+	if key == "MEGUNA" then
+		return NameMatches(instName, JJH_TOWERS.MEGUNA) or string.sub(n, 1, 6) == "meguna"
+	end
+	return NameMatches(instName, JJH_TOWERS[key])
+end
+
+-- 自己列表里的、这个 key 的塔
+local function JJHTowers(key)
 	local result = {}
 	for _, t in ipairs(MyTowers()) do
-		if NameMatches(t.Name, name) then table.insert(result, t) end
+		if JJHMatch(key, t.Name) then table.insert(result, t) end
 	end
 	return result
 end
@@ -1306,14 +1309,7 @@ local function JJHLevel(tower)
 	return tonumber(string.match(tower.Name, "%d+")) or 1
 end
 
-local function JJHFarmUUID()
-	local v = LocalPlayer:FindFirstChild("Equipped5")
-	local val = v and v.Value
-	if type(val) == "string" and val ~= "" then return val end
-	return nil
-end
-
--- 从 GetAllData 按名字取 uuid (不看有没有带); 农场塔里确定是哪一个 (Equipped5 对应的)
+-- 从 GetAllData 按名字取 uuid (不看有没有带)
 local jjhUUID, jjhEq, jjhFarmKey, jjhLoaded, jjhLast = {}, {}, nil, false, 0
 
 local function JJHRefresh()
@@ -1323,31 +1319,23 @@ local function JJHRefresh()
 	local ok, data = pcall(function() return GetAllData:InvokeServer() end)
 	if not ok or type(data) ~= "table" or type(data.Towers) ~= "table" then return end
 
-	local farmUUID = JJHFarmUUID()
-	local newUUID, newEq, farmKey = {}, {}, nil
+	local newUUID, newEq = {}, {}
 
 	for _, t in pairs(data.Towers) do
 		if type(t) == "table" and t.Name and t.UUID then
-			for key, base in pairs(JJH_TOWERS) do
-				if NameMatches(t.Name, base) then
+			for key in pairs(JJH_TOWERS) do
+				if JJHMatch(key, t.Name) then
 					local eq = t.Equipped == true
 					if not newUUID[key] or (eq and not newEq[key]) then
 						newUUID[key] = t.UUID
 						newEq[key] = eq
-					end
-					if JJH_FARM[key] then
-						if t.UUID == farmUUID then
-							farmKey = key
-						elseif eq and not farmKey then
-							farmKey = key
-						end
 					end
 				end
 			end
 		end
 	end
 
-	jjhUUID, jjhEq, jjhFarmKey, jjhLoaded = newUUID, newEq, farmKey, true
+	jjhUUID, jjhEq, jjhLoaded = newUUID, newEq, true
 end
 
 task.spawn(function()
@@ -1362,13 +1350,12 @@ local function JJHPlace(key)
 	if JJH.stopAll or not jjhLoaded then return false end
 
 	local towerName = JJH_TOWERS[key]
-	if JJH_FARM[key] and key ~= jjhFarmKey then return false end
 
-	-- Gojo 要等 King 先放下 (King 有 uuid 才等)
-	if key == "GOJO" and jjhUUID.KING and #JJHTowers(JJH_TOWERS.KING) == 0 then return false end
+	-- Kogane 要等自己的 Meguna 先放下
+	if key == "KOGANE" and #JJHTowers("MEGUNA") == 0 then return false end
 
 	-- 自己列表里已经够数了就不放
-	if #JJHTowers(towerName) >= (JJH_TARGET[key] or 1) then return false end
+	if #JJHTowers(key) >= (JJH_TARGET[key] or 1) then return false end
 
 	-- 刚发过放置请求, 等它出现在列表里
 	if tick() - (pendingPlace[towerName] or 0) < PLACE_GUARD then return false end
@@ -1378,16 +1365,17 @@ local function JJHPlace(key)
 	if tick() - (jjhLastTry[key] or 0) < interval then return false end
 	jjhLastTry[key] = tick()
 
-	local uuid = JJH_FARM[key] and JJHFarmUUID() or jjhUUID[key]
+	local uuid = jjhUUID[key]
+	if key == "KOGANE" and not uuid then uuid = KOGANE_UUID end
 	local pos = JJH_POS[key]
 	if not uuid or not pos then return false end
 
 	local ok, ret
 	if key == "KOGANE" then
-		-- Kogane 要绑定自己的 King
-		local king = JJHTowers(JJH_TOWERS.KING)[1]
-		if not king then return false end
-		ok, ret = pcall(function() return SpawnNewTower:InvokeServer(uuid, pos, king) end)
+		-- Kogane 绑定自己的 Meguna
+		local meguna = JJHTowers("MEGUNA")[1]
+		if not meguna then return false end
+		ok, ret = pcall(function() return SpawnNewTower:InvokeServer(uuid, pos, meguna) end)
 	else
 		ok, ret = pcall(function() return SpawnNewTower:InvokeServer(uuid, pos) end)
 	end
@@ -1413,7 +1401,7 @@ task.spawn(function()
 					JJH.phaseDone = true
 					return
 				end
-				if #JJHTowers(JJH_TOWERS.BASIC) < 2 then
+				if #JJHTowers("BASIC") < 2 then
 					JJHPlace("BASIC")
 				end
 				return
@@ -1434,7 +1422,7 @@ task.spawn(function()
 		pcall(function()
 			if not IsJujutsuHigh() or JJH.stopAll then return end
 
-			local miracles = JJHTowers(JJH_TOWERS.BASIC)
+			local miracles = JJHTowers("BASIC")
 
 			-- 阶段 1: 2 个 Miracle 升到 Lv4
 			if not JJH.phaseDone then
@@ -1453,14 +1441,11 @@ task.spawn(function()
 
 			-- 之后: 升级自己所有的塔 (Miracle 到 4 级为止)
 			for _, tower in ipairs(MyTowers()) do
-				local isBasic = NameMatches(tower.Name, JJH_TOWERS.BASIC)
+				local isBasic = JJHMatch("BASIC", tower.Name)
 				if (not isBasic) or JJHLevel(tower) < 4 then
-					local affected = NameMatches(tower.Name, JJH_TOWERS.B85)
-						or NameMatches(tower.Name, JJH_TOWERS.GOJO)
-						or NameMatches(tower.Name, JJH_TOWERS.KING)
-						or NameMatches(tower.Name, JJH_TOWERS.HARVESTER)
-						or NameMatches(tower.Name, JJH_TOWERS.TREE)
-						or NameMatches(tower.Name, JJH_TOWERS.KOGANE)
+					local affected = JJHMatch("MEGUNA", tower.Name)
+						or JJHMatch("HARVESTER", tower.Name)
+						or JJHMatch("KOGANE", tower.Name)
 					if not (JJH.upgradeBlocked and affected) then
 						pcall(function() UpgradeTower:InvokeServer(tower) end)
 					end
@@ -1495,7 +1480,7 @@ task.spawn(function()
 	end
 end)
 
--- King 领域 (只开自己的)
+-- Meguna 领域 (只开自己的)
 task.spawn(function()
 	local domain
 	while task.wait(2) do
@@ -1509,7 +1494,7 @@ task.spawn(function()
 				end
 				if not domain then return end
 
-				for _, t in ipairs(JJHTowers(JJH_TOWERS.KING)) do
+				for _, t in ipairs(JJHTowers("MEGUNA")) do
 					pcall(function() domain:FireServer(t) end)
 				end
 			end)
@@ -2169,7 +2154,7 @@ local uiOk, uiErr = pcall(function()
 		local eqTotal, placedTotal = 0, 0
 		for key, u in pairs(tiles) do
 			local base = JJH_TOWERS[key]
-			local list = JJHTowers(base)
+			local list = JJHTowers(key)
 			local levels = {}
 			for _, t in ipairs(list) do table.insert(levels, JJHLevel(t)) end
 			table.sort(levels)
