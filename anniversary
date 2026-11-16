@@ -1061,14 +1061,36 @@ local CIRCLE_STEPS = 12
 local CIRCLE_STEP_TIME = 0.08
 local ENTER_WAIT = 5       -- 绕圈后这么多秒还没进传送器 -> 重新 TP 绕圈
 
-local function TeleportInto(elev, hardTP)
+-- Teleporter1 坐标: 第一次看到传送器时记下来 (内存 + 文件), 之后即使传送器还没加载出来也直接用这个坐标
+local TP1_FILE = "Teleporter1Pos.txt"
+
+local function GetTP1Pos()
+	if environment.Tp1Pos then return environment.Tp1Pos end
+	pcall(function()
+		if isfile and isfile(TP1_FILE) then
+			local x, y, z = string.match(readfile(TP1_FILE), "^%s*([%-%d%.]+)%s*,%s*([%-%d%.]+)%s*,%s*([%-%d%.]+)")
+			if x then environment.Tp1Pos = Vector3.new(tonumber(x), tonumber(y), tonumber(z)) end
+		end
+	end)
+	return environment.Tp1Pos
+end
+
+local function SaveTP1Pos(v)
+	local old = environment.Tp1Pos
+	if old and (old - v).Magnitude < 1 then return end
+	environment.Tp1Pos = v
+	print("[PinataStarter] 记录 Teleporter1 坐标: " .. tostring(v))
+	pcall(function()
+		if writefile then writefile(TP1_FILE, string.format("%.3f,%.3f,%.3f", v.X, v.Y, v.Z)) end
+	end)
+end
+
+-- pos: 传送器的坐标 (Vector3), 不需要传送器实例已经加载
+local function TeleportInto(pos, hardTP)
 	local root = GetRoot()
 	if not root then return false end
 
-	local okPivot, pivot = pcall(function() return elev:GetPivot() end)
-	if not okPivot or not pivot then return false end
-
-	local center = pivot.Position + Vector3.new(0, 3, 0)
+	local center = pos + Vector3.new(0, 3, 0)
 	if hardTP then
 		pcall(function() root.CFrame = CFrame.new(center) end)
 	end
@@ -1105,23 +1127,48 @@ local function NormalLobby()
 	end
 	SetMode("normal")
 
+	local root = GetRoot()
+	if not root then LobbyState.status = "等待角色" return end
+
+	-- 1) 传送器加载出来了: 记下它的坐标; 没加载出来: 用之前记下的坐标
 	local folder = Workspace:FindFirstChild("Teleporters")
 	local elev = folder and folder:FindFirstChild("Teleporter1")
-	if not elev then
-		LobbyState.status = "等待传送器加载"
+
+	local pos
+	if elev then
+		local ok, pivot = pcall(function() return elev:GetPivot() end)
+		if ok and pivot then
+			pos = pivot.Position
+			SaveTP1Pos(pos)
+		end
+	end
+	pos = pos or GetTP1Pos()
+
+	if not pos then
+		LobbyState.status = "等待传送器加载 (还没有记录坐标)"
 		return
+	end
+
+	-- 2) 传送器没加载出来 (区域没流式加载): 直接 TP 到记录的坐标, 等它加载出来
+	if not elev then
+		LobbyState.target = nil
+		LobbyState.status = "传送器未加载 · 前往记录的坐标"
+		pcall(function() root.CFrame = CFrame.new(pos + Vector3.new(0, 3, 0)) end)
+
+		local t0 = tick()
+		while tick() - t0 < 6 do
+			if IsInGame() then return end
+			folder = Workspace:FindFirstChild("Teleporters")
+			elev = folder and folder:FindFirstChild("Teleporter1")
+			if elev then break end
+			task.wait(0.2)
+		end
+		if not elev then return end   -- 下一轮继续
 	end
 	LobbyState.target = elev
 
 	local _, _, text = ReadCount(elev)
 	LobbyState.countText = text or "-"
-
-	local root = GetRoot()
-	if not root then LobbyState.status = "等待角色" return end
-
-	local ok, pivot = pcall(function() return elev:GetPivot() end)
-	if not ok or not pivot then LobbyState.status = "找不到传送器位置" return end
-	local pos = pivot.Position
 
 	-- 刚离开过 (里面有别人): 冷却一会再回来
 	if tick() < (LobbyState.leaveUntil or 0) then
@@ -1146,7 +1193,7 @@ local function NormalLobby()
 			LobbyState.status = "重新 TP 绕圈 (第 " .. (try + 1) .. " 次) · " .. elev.Name
 		end
 
-		TeleportInto(elev, try > 0)
+		TeleportInto(pos, try > 0)
 
 		-- 绕完圈后最多等 ENTER_WAIT 秒确认进去了
 		local t0 = tick()
