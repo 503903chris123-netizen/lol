@@ -1,16 +1,17 @@
 --========================================================--
 -- PINATA STARTER (含大厅自动进传送器)
 --  局内 (Map 是 Anniversary / 场上有 Pinata): 跟着 Workspace.Mobs.Pinata 远程放塔 / 升级 / 开领域 (不走路)
---    只认自己的塔: Tower.Config.Owner == 自己
+--    只认自己的塔: 自己的塔登记在 Registry 列表里 (Tower.Config.Owner == 自己, 或刚放下的), 放 / 升 / 删 / 开领域都只看这个列表
 --    Starter (Miracle / Harvester): 一开始放在固定位置; Pinata 越过它之后, 删掉, 改放在 Pinata 的 X + offset
 --    Meguna  (King / Kogane / Amplifying): 放在 Pinata 的 X + offset, Pinata 越过塔 margin 格再删掉重放
---    Kogane: 必须先有自己的 KingOfCursesEvo (Meguna), 绑定到它上面才放; 场上数量是 0 就一直循环放
+--    Kogane: 必须先有自己的 KingOfCursesEvo (Meguna), 绑定到它上面才放; 自己的 Kogane 是 0 就一直循环放
 --    KingOfCursesEvo (Meguna) 到 3 级后不再开领域, 其他塔照常开
 --  局外 (大厅):
 --    整点前 1 分钟 (到整点后 15 分钟) 且这一小时还没打过 Pinata -> 去 Workspace.PinataTeleporters 里
 --      人数 < 10 的传送器, 触发互动提示 (不模拟按键); 满人就换另一个
 --    其余时间 / Pinata 打完之后 -> 进第一个传送器 (Workspace.Teleporters.Teleporter1) 打普通关
 --  结算界面出现 -> 自动 ExitGame 回大厅; 大厅超过 3 分钟没进游戏 -> 自动 rejoin
+--  UI: 大厅 (Teleporter1 / Pinata 传送器人数 + 下次刷新) · JujutsuHigh (带了的塔 / 放置的塔) · Pinata (走廊小地图 + 日志)
 --========================================================--
 
 local environment = getgenv()
@@ -36,6 +37,7 @@ local LocalPlayer = Players.LocalPlayer
 local PLACE_DELAY = 0.03     -- 放置循环间隔
 local UPGRADE_DELAY = 0.05   -- 升级循环间隔
 local DOMAIN_DELAY = 0.05    -- 开领域循环间隔
+local PLACE_GUARD = 0.8      -- 放塔请求发出后, 这么久内不重复放同一个塔 (等它出现在场上 / 被登记进列表)
 
 local DOMAIN_MAX_LEVEL = 3   -- Meguna 到达这个等级后不再开领域 (想"3级以后"才停, 改成 4)
 
@@ -50,19 +52,20 @@ local NEAR_DIST = 6               -- 离传送器多近算"到了"
 local HOLD_RETRY = 8              -- 触发互动后多久还在大厅就再触发一次
 local STEP_DELAY = 0.5            -- 大厅循环间隔
 local KING_SETTLE = 0.3           -- King 出现后等多久再绑定 Kogane (让服务器把 Owner 配好)
+local MAP_SPAN = 320              -- 小地图默认显示多少格长的走廊 (不够会自动撑开)
 
--- 两组塔: offset 可以在 UI 里改
+-- 两组塔 (偏移是固定的, 不再提供 UI 修改)
 local GROUPS = {
 	-- offset: 放在 Pinata 的 X + offset; margin: Pinata 越过塔多少格才删掉重放
-	{ id = "starter", title = "Starter", sub = "Miracle / Harvester", towers = { "MiracleSorcerer", "HarvesterCurse" },
+	{ id = "starter", title = "Starter", short = "S", sub = "Miracle / Harvester", towers = { "MiracleSorcerer", "HarvesterCurse" },
 	  offset = -20, margin = 20, initial = Vector3.new(113.79, FIXED_Y, FIXED_Z) },
-	{ id = "meguna",  title = "Meguna",  sub = "King / Kogane / Amplifying", towers = { "KingOfCursesEvo", "Kogane", "AmplifyingSorcerer" },
+	{ id = "meguna",  title = "Meguna",  short = "M", sub = "King / Kogane / Amplifying", towers = { "KingOfCursesEvo", "Kogane", "AmplifyingSorcerer" },
 	  offset = -80, margin = 80 },
 }
 for _, g in ipairs(GROUPS) do
 	g.anchor = g.initial  -- 当前放塔的位置 (Vector3, Y/Z 固定); 有 initial 的组一开始就放在这个固定位置
 	g.selling = false     -- 正在删塔, 暂停放置
-	g.reanchor = false    -- UI 改了偏移: 删掉现有的塔, 按新偏移重放
+	g.reanchor = false
 	g.leftInitial = false -- 有 initial 的组: 第一次越过固定位置之后才用 margin
 end
 
@@ -169,7 +172,7 @@ local function IsGameReady()
 end
 
 --========================================================--
--- 塔名 / owner / uuid
+-- 塔名 / uuid
 --========================================================--
 
 local function NameMatches(instName, base)
@@ -199,10 +202,22 @@ local function InstMatches(instName, base)
 	return NameMatches(instName, realName[base] or base)
 end
 
--- 这个塔是不是自己的: Tower.Config.Owner (ObjectValue / 名字 / UserId 都认)
---   读不到 owner 时: 房间里只有自己才当作自己的, 有别人就不当
+--========================================================--
+-- 自己的塔列表 (Registry): 只有进了这个列表的塔才会被放置判断 / 升级 / 删除 / 开领域用到
+--   进列表的条件:
+--     1) Tower.Config.Owner 是自己 (ObjectValue / 属性 / 名字 / UserId 都认)
+--     2) Owner 读不到时: 房间里只有自己, 或者刚发出放置请求 (3 秒内) 出现的同名新塔
+--     3) SpawnNewTower 直接返回了塔实例
+--   Owner 明确是别人的塔永远不会进列表
+--========================================================--
+
+local Registry = {}      -- [塔实例] = true
+local pendingPlace = {}  -- [基础塔名] = 发出放置请求的时间
+
 local ownerLogged = false
-local function IsMine(tower)
+
+-- 返回 true (是我的) / false (是别人的) / nil (读不到)
+local function OwnerState(tower)
 	if not tower then return false end
 
 	local cfg = tower:FindFirstChild("Config")
@@ -217,9 +232,7 @@ local function IsMine(tower)
 		if ok then v = a end
 	end
 
-	if v == nil then
-		return #Players:GetPlayers() <= 1
-	end
+	if v == nil then return nil end
 
 	if not ownerLogged then
 		ownerLogged = true
@@ -235,13 +248,58 @@ local function IsMine(tower)
 	return false
 end
 
--- 自己的所有塔
+-- 发出放置请求之后调用: 记下时间, 让新出现的同名塔能被登记; 返回值是塔实例就直接登记
+local function NotePlaced(base, ret)
+	pendingPlace[base] = tick()
+	if typeof(ret) == "Instance" and ret.Parent and OwnerState(ret) ~= false then
+		Registry[ret] = true
+		pendingPlace[base] = nil
+	end
+end
+
+local function ClaimPending(inst)
+	for base, t in pairs(pendingPlace) do
+		if tick() - t < 3 and InstMatches(inst.Name, base) then
+			pendingPlace[base] = nil
+			return true
+		end
+	end
+	return false
+end
+
+local function ScanTowers()
+	for inst in pairs(Registry) do
+		if not inst.Parent then Registry[inst] = nil end
+	end
+
+	local folder = Workspace:FindFirstChild("Towers")
+	if not folder then return end
+
+	for _, t in ipairs(folder:GetChildren()) do
+		if not Registry[t] then
+			local st = OwnerState(t)
+			if st == true then
+				Registry[t] = true
+			elseif st == nil then
+				if #Players:GetPlayers() <= 1 or ClaimPending(t) then
+					Registry[t] = true
+				end
+			end
+		end
+	end
+end
+
+task.spawn(function()
+	while task.wait(0.1) do
+		pcall(ScanTowers)
+	end
+end)
+
+-- 自己的所有塔 (来自列表)
 local function MyTowers()
 	local list = {}
-	local folder = Workspace:FindFirstChild("Towers")
-	if not folder then return list end
-	for _, t in ipairs(folder:GetChildren()) do
-		if IsMine(t) then table.insert(list, t) end
+	for inst in pairs(Registry) do
+		if inst.Parent then table.insert(list, inst) end
 	end
 	return list
 end
@@ -291,6 +349,16 @@ task.spawn(function()
 end)
 
 --========================================================--
+-- 日志 (UI 显示什么时候放 / 什么时候删)
+--========================================================--
+
+local Log = {}
+local function AddLog(kind, text)
+	table.insert(Log, 1, { t = os.time(), kind = kind, text = text })
+	if #Log > 30 then table.remove(Log) end
+end
+
+--========================================================--
 -- Pinata 位置
 --========================================================--
 
@@ -307,7 +375,7 @@ local function GetPinataPosition()
 end
 
 --========================================================--
--- 放置 / 删除 / 重放 (全部远程放, 不走路; 只认自己的塔)
+-- 放置 / 删除 / 重放 (全部远程放, 不走路; 只认自己列表里的塔)
 --========================================================--
 
 local function Dir(g)
@@ -318,6 +386,12 @@ end
 local function Margin(g)
 	if g.initial and not g.leftInitial then return 0 end
 	return g.margin or 0
+end
+
+-- 触发删除的 Pinata X: 越过 anchor 这么远
+local function DeleteX(g)
+	if not g.anchor then return nil end
+	return g.anchor.X + Dir(g) * Margin(g)
 end
 
 -- 这一组场上自己的塔
@@ -360,10 +434,11 @@ local function ResolveTarget(g)
 
 	g.anchor = Vector3.new(p.X + g.offset, FIXED_Y, FIXED_Z)
 	print("[PinataStarter] " .. g.title .. " 放置位置: " .. tostring(g.anchor))
+	AddLog("place", string.format("%s 目标位置 X=%.0f", g.title, g.anchor.X))
 	return g.anchor
 end
 
--- 每个塔名一个疯狂放置循环 (只在 Pinata 图里放; 自己的这个塔数量是 0 才放)
+-- 每个塔名一个疯狂放置循环 (只在 Pinata 图里放; 自己列表里这个塔数量是 0 才放)
 local function StartPlacer(g, base)
 	-- 同一组里每个塔 X 错开一点 (不叠放); Kogane 不偏移
 	local slotX = 0
@@ -383,6 +458,7 @@ local function StartPlacer(g, base)
 			pcall(function()
 				if g.selling or not IsPinataMap() then return end
 				if CountMine(base) > 0 then return end
+				if tick() - (pendingPlace[base] or 0) < PLACE_GUARD then return end
 
 				-- 1) 先拿目标放置位置 (Pinata 中心点 + 偏移 X)
 				local pos = ResolveTarget(g)
@@ -404,7 +480,10 @@ local function StartPlacer(g, base)
 					local ok, ret = pcall(function()
 						return SpawnNewTower:InvokeServer(uuid, CFrame.new(pos) * KOGANE_ANGLES, king)
 					end)
-					if not (ok and ret) and tick() - lastWarn > 1 then
+					if ok then NotePlaced(base, ret) end
+					if ok and ret then
+						AddLog("place", string.format("放置 Kogane · X=%.0f", pos.X))
+					elseif tick() - lastWarn > 1 then
 						lastWarn = tick()
 						warn("[Kogane] 放置失败", ok, ret)
 					end
@@ -413,7 +492,13 @@ local function StartPlacer(g, base)
 					if not uuid then return end
 
 					local target = pos + Vector3.new(slotX, 0, 0)
-					pcall(function() SpawnNewTower:InvokeServer(uuid, CFrame.new(target)) end)
+					local ok, ret = pcall(function()
+						return SpawnNewTower:InvokeServer(uuid, CFrame.new(target))
+					end)
+					if ok then NotePlaced(base, ret) end
+					if ok and ret then
+						AddLog("place", string.format("放置 %s · X=%.0f", realName[base] or base, target.X))
+					end
 				end
 			end)
 		end
@@ -428,7 +513,7 @@ end
 
 local sellingInst = {}  -- [塔实例] = true (删除请求还没返回)
 
--- 跟踪 Pinata: 第一次定位, 之后 Pinata 走到某组塔后面 (或改了偏移) 就删掉这组塔重放
+-- 跟踪 Pinata: 第一次定位, 之后 Pinata 走到某组塔后面就删掉这组塔重放
 task.spawn(function()
 	while task.wait(0.03) do
 		pcall(function()
@@ -445,9 +530,13 @@ task.spawn(function()
 				if not g.anchor then
 					g.anchor = Vector3.new(pos.X + g.offset, FIXED_Y, FIXED_Z)
 					print("[PinataStarter] " .. g.title .. " 放置位置: " .. tostring(g.anchor))
+					AddLog("place", string.format("%s 目标位置 X=%.0f", g.title, g.anchor.X))
 				else
 					local passed = g.reanchor or (pos.X - g.anchor.X) * Dir(g) >= Margin(g)
 					if passed or g.selling then
+						if not g.selling then
+							AddLog("sell", string.format("删除 %s · Pinata 越过 (X=%.0f)", g.title, pos.X))
+						end
 						-- 条件成立: 疯狂删除这组塔, 直到删干净, 再按最新位置重放 (条件随之不再成立)
 						g.selling = true
 						local left = GetGroupTowers(g)
@@ -457,6 +546,7 @@ task.spawn(function()
 							g.anchor = Vector3.new(pos.X + g.offset, FIXED_Y, FIXED_Z)
 							g.selling = false
 							print("[PinataStarter] " .. g.title .. " 已删除, 重放位置: " .. tostring(g.anchor))
+							AddLog("place", string.format("重放 %s → X=%.0f", g.title, g.anchor.X))
 						else
 							for _, t in ipairs(left) do
 								if not sellingInst[t] then
@@ -477,7 +567,7 @@ task.spawn(function()
 end)
 
 --========================================================--
--- 疯狂升级 (只升自己的塔)
+-- 疯狂升级 (只升自己列表里的塔)
 --========================================================--
 
 local upgrading = {}  -- [塔实例] = true  (这个塔有升级请求还没返回)
@@ -1159,7 +1249,7 @@ task.spawn(function()
 end)
 
 --========================================================--
--- JUJUTSU HIGH (Workspace.Map.JujutsuHigh, Stage 1 普通关) · 只认自己的塔
+-- JUJUTSU HIGH (Workspace.Map.JujutsuHigh, Stage 1 普通关) · 只认自己列表里的塔
 --  用主脚本的放塔 / 升级逻辑: 2x Miracle 升到 Lv4 -> 之后疯狂放所有能放的塔 + 升级所有塔
 --  不识别塔阵容: 不管有没有带, 全部尝试放 (放不了的自动退避); 农场塔只放 Equipped5 对应的那一个
 --  同时带主脚本的 AutoSkip / King 领域 / 蜗牛暂停升级 / Wave 50 卖塔
@@ -1172,6 +1262,11 @@ local JJH_TOWERS = {
 	GOJO = "StrongestSorcererEvo", KING = "KingOfCursesEvo", STRONGEST = "StrongestSorcerer",
 	TREE = "TreeOfLife", FROST = "FrostBlossom", PINATA = "Pinata", KOGANE = "Kogane", CHEAP = "SorcererAgent",
 }
+local JJH_NAMES = {
+	BASIC = "Miracle", HARVESTER = "Harvester", B85 = "KingOfCurses Frost",
+	GOJO = "StrongestSorcerer Evo", KING = "KingOfCurses Evo", STRONGEST = "StrongestSorcerer",
+	TREE = "TreeOfLife", FROST = "FrostBlossom", PINATA = "Pinata", KOGANE = "Kogane", CHEAP = "SorcererAgent",
+}
 local JJH_FARM = { TREE = true, FROST = true, PINATA = true, KOGANE = true, CHEAP = true }
 local JJH_TARGET = {
 	BASIC = 2, HARVESTER = 1, KING = 1, GOJO = 1, TREE = 1, FROST = 1, PINATA = 1,
@@ -1180,7 +1275,7 @@ local JJH_TARGET = {
 -- 放置顺序: Miracle 先 (阶段 1), 之后全部
 local JJH_ORDER = { "BASIC", "HARVESTER", "B85", "GOJO", "KING", "STRONGEST", "TREE", "FROST", "PINATA", "KOGANE", "CHEAP" }
 
--- 位置 (来自主脚本 JujutsuHigh): 农场塔和 Starter 同一坐标
+-- 位置: 所有塔放同一坐标
 local JJH_BASIC_POS = CFrame.new(-44.38, 16.86, -83.57)
 local JJH_MAIN_POS = JJH_BASIC_POS
 local JJH_POS = {
@@ -1194,7 +1289,7 @@ local function IsJujutsuHigh()
 	return map ~= nil and map:FindFirstChild("JujutsuHigh") ~= nil
 end
 
--- 自己的、名字匹配的塔
+-- 自己的、名字匹配的塔 (来自列表)
 local function JJHTowers(name)
 	local result = {}
 	for _, t in ipairs(MyTowers()) do
@@ -1219,7 +1314,7 @@ local function JJHFarmUUID()
 end
 
 -- 从 GetAllData 按名字取 uuid (不看有没有带); 农场塔里确定是哪一个 (Equipped5 对应的)
-local jjhUUID, jjhFarmKey, jjhLoaded, jjhLast = {}, nil, false, 0
+local jjhUUID, jjhEq, jjhFarmKey, jjhLoaded, jjhLast = {}, {}, nil, false, 0
 
 local function JJHRefresh()
 	if tick() - jjhLast < 3 then return end
@@ -1252,7 +1347,7 @@ local function JJHRefresh()
 		end
 	end
 
-	jjhUUID, jjhFarmKey, jjhLoaded = newUUID, farmKey, true
+	jjhUUID, jjhEq, jjhFarmKey, jjhLoaded = newUUID, newEq, farmKey, true
 end
 
 task.spawn(function()
@@ -1272,7 +1367,11 @@ local function JJHPlace(key)
 	-- Gojo 要等 King 先放下 (King 有 uuid 才等)
 	if key == "GOJO" and jjhUUID.KING and #JJHTowers(JJH_TOWERS.KING) == 0 then return false end
 
+	-- 自己列表里已经够数了就不放
 	if #JJHTowers(towerName) >= (JJH_TARGET[key] or 1) then return false end
+
+	-- 刚发过放置请求, 等它出现在列表里
+	if tick() - (pendingPlace[towerName] or 0) < PLACE_GUARD then return false end
 
 	-- 放不了的 (没带 / 钱不够) 连续失败多次后退避
 	local interval = ((jjhFails[key] or 0) >= 5) and 5 or 0.5
@@ -1294,6 +1393,7 @@ local function JJHPlace(key)
 	end
 
 	if ok and ret then
+		NotePlaced(towerName, ret)
 		jjhFails[key] = 0
 		return true
 	end
@@ -1471,24 +1571,31 @@ task.spawn(function()
 end)
 
 --========================================================--
--- UI: 简洁的小面板 (顶部状态 · 两组偏移 · 几行信息); 标题栏拖动, 右侧圆按钮 / RightControl 开关
+-- UI
+--   大厅: Teleporter1 / Pinata 传送器 两个框 (人数) + 下次刷新
+--   JujutsuHigh: 带了的塔 / 放置的塔 / 局内信息
+--   Pinata: 走廊小地图 (Pinata 在上方往下走, 显示每个塔的位置 / 放置线 / 删除线) + 日志
+--   标题栏拖动; 右侧圆按钮 / RightControl 开关
 --========================================================--
 
 local uiOk, uiErr = pcall(function()
 	local UserInputService = game:GetService("UserInputService")
 
 	local C = {
-		bg     = Color3.fromRGB(13, 13, 17),
-		card   = Color3.fromRGB(21, 21, 27),
-		btn    = Color3.fromRGB(30, 30, 38),
-		line   = Color3.fromRGB(38, 38, 48),
-		text   = Color3.fromRGB(235, 235, 242),
-		sub    = Color3.fromRGB(132, 132, 150),
-		dim    = Color3.fromRGB(84, 84, 100),
+		bg     = Color3.fromRGB(12, 12, 16),
+		card   = Color3.fromRGB(20, 20, 27),
+		btn    = Color3.fromRGB(30, 30, 40),
+		line   = Color3.fromRGB(40, 40, 52),
+		text   = Color3.fromRGB(236, 236, 244),
+		sub    = Color3.fromRGB(135, 135, 154),
+		dim    = Color3.fromRGB(84, 84, 102),
 		green  = Color3.fromRGB(74, 222, 128),
+		red    = Color3.fromRGB(248, 113, 113),
 		amber  = Color3.fromRGB(251, 191, 36),
 		gray   = Color3.fromRGB(110, 110, 128),
 		accent = Color3.fromRGB(129, 140, 248),
+		rose   = Color3.fromRGB(244, 114, 182),
+		cyan   = Color3.fromRGB(34, 211, 238),
 	}
 
 	local function New(class, props, parent)
@@ -1507,6 +1614,13 @@ local uiOk, uiErr = pcall(function()
 		}, parent)
 	end
 
+	local function Pad(parent, l, t, r, b)
+		return New("UIPadding", {
+			PaddingLeft = UDim.new(0, l), PaddingTop = UDim.new(0, t),
+			PaddingRight = UDim.new(0, r), PaddingBottom = UDim.new(0, b),
+		}, parent)
+	end
+
 	local function Label(parent, text, size, color, font, xalign)
 		return New("TextLabel", {
 			BackgroundTransparency = 1, Text = text, TextSize = size, TextColor3 = color,
@@ -1520,6 +1634,19 @@ local uiOk, uiErr = pcall(function()
 		pcall(function()
 			TweenService:Create(obj, TweenInfo.new(t or 0.2, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), props):Play()
 		end)
+	end
+
+	local function Fmt(s)
+		s = math.max(0, math.floor(s))
+		local h, m, sec = math.floor(s / 3600), math.floor((s % 3600) / 60), s % 60
+		if h > 0 then return string.format("%d:%02d:%02d", h, m, sec) end
+		return string.format("%d:%02d", m, sec)
+	end
+
+	local function Commas(n)
+		local s = tostring(math.floor(tonumber(n) or 0))
+		local f = s:reverse():gsub("(%d%d%d)", "%1,"):reverse()
+		return (f:gsub("^,", ""))
 	end
 
 	local function GetGuiParent()
@@ -1541,209 +1668,727 @@ local uiOk, uiErr = pcall(function()
 	})
 	Gui.Parent = GetGuiParent()
 
-	-- 主面板: 高度自动撑开
+	--------------------------------------------------------
+	-- 主面板
+	--------------------------------------------------------
 	local Main = New("Frame", {
-		Name = "Main", Size = UDim2.new(0, 292, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
-		Position = UDim2.new(0, 24, 0.5, -150), BackgroundColor3 = C.bg, BorderSizePixel = 0,
+		Name = "Main", Size = UDim2.new(0, 324, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
+		Position = UDim2.new(0, 24, 0.5, -230), BackgroundColor3 = C.bg, BorderSizePixel = 0,
 	}, Gui)
-	Corner(Main, 16)
-	Stroke(Main, C.line, 1, 0.1)
-	New("UIPadding", {
-		PaddingTop = UDim.new(0, 12), PaddingBottom = UDim.new(0, 12),
-		PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 12),
-	}, Main)
+	Corner(Main, 18)
+	Stroke(Main, C.line, 1, 0.05)
+	Pad(Main, 12, 12, 12, 12)
 	New("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder }, Main)
 
-	-- 标题栏 (拖动区): 状态点 + 标题 + 状态
+	-- 标题栏
 	local Header = New("Frame", { Size = UDim2.new(1, 0, 0, 26), BackgroundTransparency = 1, LayoutOrder = 1 }, Main)
-
 	local Dot = New("Frame", {
 		Size = UDim2.new(0, 8, 0, 8), Position = UDim2.new(0, 2, 0.5, -4),
 		BackgroundColor3 = C.gray, BorderSizePixel = 0,
 	}, Header)
 	Corner(Dot, 4)
-
-	local Title = Label(Header, "Pinata Starter", 14, C.text, Enum.Font.GothamBold)
-	Title.Size = UDim2.new(0.6, 0, 1, 0)
+	local Title = Label(Header, "Pinata Starter", 15, C.text, Enum.Font.GothamBold)
+	Title.Size = UDim2.new(0.55, 0, 1, 0)
 	Title.Position = UDim2.new(0, 18, 0, 0)
-
 	local Badge = Label(Header, "WAIT", 10, C.gray, Enum.Font.GothamBold, Enum.TextXAlignment.Right)
 	Badge.AnchorPoint = Vector2.new(1, 0.5)
 	Badge.Position = UDim2.new(1, 0, 0.5, 0)
-	Badge.Size = UDim2.new(0.4, 0, 1, 0)
+	Badge.Size = UDim2.new(0.45, 0, 1, 0)
 
-	-- 当前在做什么
 	local Status = Label(Main, "-", 11, C.sub, Enum.Font.Gotham)
 	Status.Size = UDim2.new(1, 0, 0, 14)
 	Status.TextTruncate = Enum.TextTruncate.AtEnd
 	Status.LayoutOrder = 2
 
-	-- 偏移设置: 每组一行  [名字 · 场上数]  « ‹ [值] › »
-	local function OffsetRow(g, order)
-		local row = New("Frame", {
-			Size = UDim2.new(1, 0, 0, 38), BackgroundColor3 = C.card, BorderSizePixel = 0, LayoutOrder = order,
-		}, Main)
-		Corner(row, 10)
-
-		local name = Label(row, g.title, 12, C.text, Enum.Font.GothamBold)
-		name.Position = UDim2.new(0, 12, 0, 5)
-		name.Size = UDim2.new(0, 70, 0, 16)
-
-		local count = Label(row, "0 座", 10, C.dim, Enum.Font.Gotham)
-		count.Position = UDim2.new(0, 12, 0, 20)
-		count.Size = UDim2.new(0, 70, 0, 12)
-
-		local ctrl = New("Frame", {
-			AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -8, 0.5, 0),
-			Size = UDim2.new(0, 162, 0, 24), BackgroundTransparency = 1,
-		}, row)
-		New("UIListLayout", {
-			FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 3),
-			HorizontalAlignment = Enum.HorizontalAlignment.Right, VerticalAlignment = Enum.VerticalAlignment.Center,
-			SortOrder = Enum.SortOrder.LayoutOrder,
-		}, ctrl)
-
-		local box
-		local function SetOffset(n)
-			if n ~= g.offset then
-				g.offset = n
-				g.reanchor = true
-			end
-			if box then box.Text = tostring(g.offset) end
-		end
-
-		local function Step(text, delta, order2)
-			local b = New("TextButton", {
-				Size = UDim2.new(0, 24, 0, 24), BackgroundColor3 = C.btn, BorderSizePixel = 0,
-				Text = text, TextColor3 = C.sub, TextSize = 12, Font = Enum.Font.GothamBold,
-				AutoButtonColor = false, LayoutOrder = order2,
-			}, ctrl)
-			Corner(b, 7)
-			b.MouseEnter:Connect(function() Tween(b, { TextColor3 = C.text, BackgroundColor3 = C.line }, 0.12) end)
-			b.MouseLeave:Connect(function() Tween(b, { TextColor3 = C.sub, BackgroundColor3 = C.btn }, 0.12) end)
-			b.MouseButton1Click:Connect(function() SetOffset(g.offset + delta) end)
-		end
-
-		Step("«", -10, 1)
-		Step("‹", -1, 2)
-		box = New("TextBox", {
-			Size = UDim2.new(0, 42, 0, 24), BackgroundColor3 = C.bg, BorderSizePixel = 0,
-			Text = tostring(g.offset), PlaceholderText = "0", TextColor3 = C.text, PlaceholderColor3 = C.dim,
-			TextSize = 12, Font = Enum.Font.GothamBold, ClearTextOnFocus = false, LayoutOrder = 3,
-		}, ctrl)
-		Corner(box, 7)
-		local boxStroke = Stroke(box, C.line, 1, 0.2)
-		Step("›", 1, 4)
-		Step("»", 10, 5)
-
-		box.Focused:Connect(function() Tween(boxStroke, { Color = C.accent }, 0.15) end)
-		box.FocusLost:Connect(function()
-			SetOffset(tonumber(box.Text) or g.offset)
-			Tween(boxStroke, { Color = C.line }, 0.15)
-		end)
-
-		return count
+	local function Card(parent, order, h)
+		local f = New("Frame", {
+			Size = UDim2.new(1, 0, 0, h or 0),
+			AutomaticSize = h and Enum.AutomaticSize.None or Enum.AutomaticSize.Y,
+			BackgroundColor3 = C.card, BorderSizePixel = 0, LayoutOrder = order,
+		}, parent)
+		Corner(f, 12)
+		Stroke(f, C.line, 1, 0.4)
+		return f
 	end
 
-	local StarterCount = OffsetRow(GROUPS[1], 3)
-	local MegunaCount = OffsetRow(GROUPS[2], 4)
+	local function Page(order)
+		local p = New("Frame", {
+			Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
+			BackgroundTransparency = 1, LayoutOrder = order, Visible = false,
+		}, Main)
+		New("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder }, p)
+		return p
+	end
 
-	-- 信息: 几行 key / value
-	local Info = New("Frame", {
-		Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
-		BackgroundColor3 = C.card, BorderSizePixel = 0, LayoutOrder = 5,
-	}, Main)
-	Corner(Info, 10)
-	New("UIPadding", {
-		PaddingTop = UDim.new(0, 8), PaddingBottom = UDim.new(0, 8),
-		PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 12),
-	}, Info)
-	New("UIListLayout", { Padding = UDim.new(0, 5), SortOrder = Enum.SortOrder.LayoutOrder }, Info)
-
-	local function InfoRow(caption, order)
-		local r = New("Frame", { Size = UDim2.new(1, 0, 0, 16), BackgroundTransparency = 1, LayoutOrder = order }, Info)
+	local function InfoRow(parent, caption, order, y)
+		local r = New("Frame", {
+			Size = UDim2.new(1, 0, 0, 16), BackgroundTransparency = 1, LayoutOrder = order,
+		}, parent)
 		local k = Label(r, caption, 11, C.sub, Enum.Font.Gotham)
-		k.Size = UDim2.new(0.45, 0, 1, 0)
+		k.Size = UDim2.new(0.42, 0, 1, 0)
 		local v = Label(r, "-", 12, C.text, Enum.Font.GothamBold, Enum.TextXAlignment.Right)
 		v.AnchorPoint = Vector2.new(1, 0)
 		v.Position = UDim2.new(1, 0, 0, 0)
-		v.Size = UDim2.new(0.55, 0, 1, 0)
+		v.Size = UDim2.new(0.58, 0, 1, 0)
 		v.TextTruncate = Enum.TextTruncate.AtEnd
 		return v
 	end
 
-	local VPinata = InfoRow("Pinata X", 1)
-	local VGap = InfoRow("距重放", 2)
-	local VReady = InfoRow("可放的塔", 3)
-	local VNext = InfoRow("下次 Pinata", 4)
+	--------------------------------------------------------
+	-- 下次 Pinata 刷新 (所有页面都显示)
+	--------------------------------------------------------
+	local Clock = Card(Main, 3, 78)
+	local ClockCap = Label(Clock, string.format("NEXT PINATA · 每整点 · 提前 %d 分钟准备 · %d 分钟后消失",
+		math.floor(PREP_SECONDS / 60), math.floor(AFTER_SECONDS / 60)), 9, C.dim, Enum.Font.GothamBold)
+	ClockCap.Position = UDim2.new(0, 12, 0, 8)
+	ClockCap.Size = UDim2.new(1, -24, 0, 12)
+	ClockCap.TextTruncate = Enum.TextTruncate.AtEnd
 
-	local function GapNumber(g, px)
-		if px and g.anchor then
-			return Margin(g) + (g.anchor.X - px) * Dir(g)
+	local ClockTime = Label(Clock, "--:--", 26, C.text, Enum.Font.GothamBold)
+	ClockTime.Position = UDim2.new(0, 12, 0, 22)
+	ClockTime.Size = UDim2.new(0, 100, 0, 32)
+
+	local ClockPhase = Label(Clock, "-", 12, C.accent, Enum.Font.GothamBold, Enum.TextXAlignment.Right)
+	ClockPhase.AnchorPoint = Vector2.new(1, 0)
+	ClockPhase.Position = UDim2.new(1, -12, 0, 24)
+	ClockPhase.Size = UDim2.new(1, -124, 0, 16)
+
+	local ClockCount = Label(Clock, "-", 11, C.sub, Enum.Font.Gotham, Enum.TextXAlignment.Right)
+	ClockCount.AnchorPoint = Vector2.new(1, 0)
+	ClockCount.Position = UDim2.new(1, -12, 0, 40)
+	ClockCount.Size = UDim2.new(1, -124, 0, 14)
+
+	local BarBg = New("Frame", {
+		Size = UDim2.new(1, -24, 0, 5), Position = UDim2.new(0, 12, 0, 62),
+		BackgroundColor3 = C.btn, BorderSizePixel = 0,
+	}, Clock)
+	Corner(BarBg, 3)
+	local BarFill = New("Frame", { Size = UDim2.new(0, 0, 1, 0), BackgroundColor3 = C.accent, BorderSizePixel = 0 }, BarBg)
+	Corner(BarFill, 3)
+
+	--------------------------------------------------------
+	-- 页面: 大厅
+	--------------------------------------------------------
+	local LobbyPage = Page(4)
+
+	local BoxRow = New("Frame", { Size = UDim2.new(1, 0, 0, 84), BackgroundTransparency = 1, LayoutOrder = 1 }, LobbyPage)
+
+	local function MakeBox(xs, xo, caption)
+		local f = New("Frame", {
+			Size = UDim2.new(0.5, -4, 1, 0), Position = UDim2.new(xs, xo, 0, 0),
+			BackgroundColor3 = C.card, BorderSizePixel = 0,
+		}, BoxRow)
+		Corner(f, 12)
+		local st = Stroke(f, C.line, 1, 0.3)
+		local cap = Label(f, caption, 10, C.sub, Enum.Font.GothamBold)
+		cap.Position = UDim2.new(0, 12, 0, 8)
+		cap.Size = UDim2.new(1, -24, 0, 12)
+		local big = Label(f, "-", 26, C.text, Enum.Font.GothamBold)
+		big.Position = UDim2.new(0, 12, 0, 22)
+		big.Size = UDim2.new(1, -24, 0, 32)
+		local sub = Label(f, "-", 11, C.sub, Enum.Font.Gotham)
+		sub.Position = UDim2.new(0, 12, 0, 58)
+		sub.Size = UDim2.new(1, -24, 0, 16)
+		sub.TextTruncate = Enum.TextTruncate.AtEnd
+		return big, sub, st
+	end
+
+	local T1Big, T1Sub, T1Stroke = MakeBox(0, 0, "TELEPORTER1")
+	local PTBig, PTSub, PTStroke = MakeBox(0.5, 4, "PINATA TELEPORTER")
+
+	local ChipCard = Card(LobbyPage, 2)
+	Pad(ChipCard, 12, 10, 12, 10)
+	New("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder }, ChipCard)
+	local ChipTitle = Label(ChipCard, "Pinata 传送器", 11, C.sub, Enum.Font.GothamBold)
+	ChipTitle.Size = UDim2.new(1, 0, 0, 14)
+	ChipTitle.LayoutOrder = 1
+	local ChipGrid = New("Frame", {
+		Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
+		BackgroundTransparency = 1, LayoutOrder = 2,
+	}, ChipCard)
+	New("UIGridLayout", {
+		CellSize = UDim2.new(0.2, -4, 0, 24), CellPadding = UDim2.new(0, 4, 0, 4),
+		SortOrder = Enum.SortOrder.LayoutOrder,
+	}, ChipGrid)
+
+	local chips, chipSig = {}, ""
+
+	local LobbyInfo = Card(LobbyPage, 3)
+	Pad(LobbyInfo, 12, 8, 12, 8)
+	New("UIListLayout", { Padding = UDim.new(0, 5), SortOrder = Enum.SortOrder.LayoutOrder }, LobbyInfo)
+	local VMode = InfoRow(LobbyInfo, "当前目标", 1)
+	local VStay = InfoRow(LobbyInfo, "大厅停留 / 自动 rejoin", 2)
+
+	--------------------------------------------------------
+	-- 页面: JujutsuHigh
+	--------------------------------------------------------
+	local JJHPage = Page(5)
+
+	local JInfo = Card(JJHPage, 1)
+	Pad(JInfo, 12, 8, 12, 8)
+	New("UIListLayout", { Padding = UDim.new(0, 5), SortOrder = Enum.SortOrder.LayoutOrder }, JInfo)
+	local JWave = InfoRow(JInfo, "Wave", 1)
+	local JTime = InfoRow(JInfo, "时间", 2)
+	local JGold = InfoRow(JInfo, "Gold", 3)
+	local JPlayers = InfoRow(JInfo, "服务器玩家", 4)
+	local JPhase = InfoRow(JInfo, "阶段", 5)
+	local JFarm = InfoRow(JInfo, "农场塔 (Equipped5)", 6)
+
+	local JTiles = Card(JJHPage, 2)
+	Pad(JTiles, 12, 10, 12, 10)
+	New("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder }, JTiles)
+	local JTilesTitle = Label(JTiles, "塔", 11, C.sub, Enum.Font.GothamBold)
+	JTilesTitle.Size = UDim2.new(1, 0, 0, 14)
+	JTilesTitle.LayoutOrder = 1
+	local JGrid = New("Frame", {
+		Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
+		BackgroundTransparency = 1, LayoutOrder = 2,
+	}, JTiles)
+	New("UIGridLayout", {
+		CellSize = UDim2.new(0.5, -4, 0, 42), CellPadding = UDim2.new(0, 8, 0, 6),
+		SortOrder = Enum.SortOrder.LayoutOrder,
+	}, JGrid)
+
+	local tiles = {}
+	for i, key in ipairs(JJH_ORDER) do
+		local f = New("Frame", { BackgroundColor3 = C.btn, BorderSizePixel = 0, LayoutOrder = i }, JGrid)
+		Corner(f, 9)
+		local fs = Stroke(f, C.line, 1, 0.5)
+		local dot = New("Frame", {
+			Size = UDim2.new(0, 6, 0, 6), Position = UDim2.new(0, 9, 0, 10),
+			BackgroundColor3 = C.gray, BorderSizePixel = 0,
+		}, f)
+		Corner(dot, 3)
+		local nm = Label(f, JJH_NAMES[key], 11, C.text, Enum.Font.GothamBold)
+		nm.Position = UDim2.new(0, 20, 0, 4)
+		nm.Size = UDim2.new(1, -52, 0, 14)
+		nm.TextTruncate = Enum.TextTruncate.AtEnd
+		local st = Label(f, "-", 10, C.sub, Enum.Font.Gotham)
+		st.Position = UDim2.new(0, 10, 0, 22)
+		st.Size = UDim2.new(1, -16, 0, 14)
+		st.TextTruncate = Enum.TextTruncate.AtEnd
+		local cnt = Label(f, "", 14, C.text, Enum.Font.GothamBold, Enum.TextXAlignment.Right)
+		cnt.AnchorPoint = Vector2.new(1, 0)
+		cnt.Position = UDim2.new(1, -8, 0, 3)
+		cnt.Size = UDim2.new(0, 40, 0, 16)
+		tiles[key] = { frame = f, stroke = fs, dot = dot, name = nm, state = st, count = cnt }
+	end
+
+	--------------------------------------------------------
+	-- 页面: Pinata (走廊小地图 + 信息 + 日志)
+	--------------------------------------------------------
+	local PinataPage = Page(6)
+
+	local COR_W, COR_H = 124, 232
+	local MapCard = Card(PinataPage, 1, COR_H + 38)
+
+	local MapTitle = Label(MapCard, "MINIMAP  ·  Pinata ↓ 前进", 10, C.sub, Enum.Font.GothamBold)
+	MapTitle.Position = UDim2.new(0, 12, 0, 8)
+	MapTitle.Size = UDim2.new(1, -24, 0, 12)
+
+	local Corridor = New("Frame", {
+		Size = UDim2.new(0, COR_W, 0, COR_H), Position = UDim2.new(0, 12, 0, 24),
+		BackgroundColor3 = C.bg, BorderSizePixel = 0, ClipsDescendants = true,
+	}, MapCard)
+	Corner(Corridor, 10)
+	Stroke(Corridor, C.line, 1, 0.2)
+
+	-- 走廊里的车道线 (5 条: Miracle / Harvester / King / Kogane / Amplifying)
+	local LANE = { MiracleSorcerer = 0.14, HarvesterCurse = 0.32, KingOfCursesEvo = 0.52, Kogane = 0.70, AmplifyingSorcerer = 0.88 }
+	local TAG = { MiracleSorcerer = "Mi", HarvesterCurse = "Ha", KingOfCursesEvo = "Ki", Kogane = "Ko", AmplifyingSorcerer = "Am" }
+	for _, x in pairs(LANE) do
+		New("Frame", {
+			Size = UDim2.new(0, 1, 1, 0), Position = UDim2.new(x, 0, 0, 0),
+			BackgroundColor3 = C.line, BackgroundTransparency = 0.6, BorderSizePixel = 0,
+		}, Corridor)
+	end
+
+	-- 顶部 / 底部 X 刻度
+	local AxisTop = Label(MapCard, "", 9, C.dim, Enum.Font.Gotham, Enum.TextXAlignment.Left)
+	AxisTop.Position = UDim2.new(0, 14, 0, COR_H + 26)
+	AxisTop.Size = UDim2.new(0, 60, 0, 10)
+	local AxisBottom = Label(MapCard, "", 9, C.dim, Enum.Font.Gotham, Enum.TextXAlignment.Right)
+	AxisBottom.Position = UDim2.new(0, 12 + COR_W - 70, 0, COR_H + 26)
+	AxisBottom.Size = UDim2.new(0, 66, 0, 10)
+
+	-- Pinata 标记
+	local PinataMark = New("Frame", {
+		Size = UDim2.new(0, 22, 0, 22), AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.new(0.5, 0, 0, 12), BackgroundColor3 = C.amber, BorderSizePixel = 0,
+		Visible = false, ZIndex = 5,
+	}, Corridor)
+	Corner(PinataMark, 11)
+	Stroke(PinataMark, C.bg, 2, 0)
+	local PinataTxt = Label(PinataMark, "P", 12, C.bg, Enum.Font.GothamBold, Enum.TextXAlignment.Center)
+	PinataTxt.Size = UDim2.new(1, 0, 1, 0)
+	PinataTxt.ZIndex = 6
+
+	-- 每组: 放置线 (绿) + 删除线 (红)
+	local lines = {}
+	for i, g in ipairs(GROUPS) do
+		local place = New("Frame", {
+			Size = UDim2.new(1, 0, 0, 2), BackgroundColor3 = C.green, BackgroundTransparency = 0.2,
+			BorderSizePixel = 0, Visible = false, ZIndex = 2,
+		}, Corridor)
+		local placeLbl = Label(Corridor, "放 " .. g.short, 9, C.green, Enum.Font.GothamBold)
+		placeLbl.Size = UDim2.new(0, 30, 0, 11)
+		placeLbl.Visible = false
+		placeLbl.ZIndex = 3
+
+		local del = New("Frame", {
+			Size = UDim2.new(1, 0, 0, 2), BackgroundColor3 = C.red, BackgroundTransparency = 0.15,
+			BorderSizePixel = 0, Visible = false, ZIndex = 2,
+		}, Corridor)
+		local delLbl = Label(Corridor, "删 " .. g.short, 9, C.red, Enum.Font.GothamBold, Enum.TextXAlignment.Right)
+		delLbl.Size = UDim2.new(0, 30, 0, 11)
+		delLbl.Visible = false
+		delLbl.ZIndex = 3
+
+		lines[i] = { place = place, placeLbl = placeLbl, del = del, delLbl = delLbl }
+	end
+
+	local dots = {}   -- [塔实例] = { frame, label }
+	local mapTop, mapBottom = nil, nil
+
+	-- 右侧信息
+	local SideInfo = New("Frame", {
+		Position = UDim2.new(0, 12 + COR_W + 12, 0, 24), Size = UDim2.new(1, -(12 + COR_W + 12 + 12), 0, COR_H),
+		BackgroundTransparency = 1,
+	}, MapCard)
+	New("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }, SideInfo)
+
+	local function SideRow(caption, order)
+		local r = New("Frame", { Size = UDim2.new(1, 0, 0, 28), BackgroundTransparency = 1, LayoutOrder = order }, SideInfo)
+		local k = Label(r, caption, 9, C.dim, Enum.Font.GothamBold)
+		k.Size = UDim2.new(1, 0, 0, 11)
+		local v = Label(r, "-", 12, C.text, Enum.Font.GothamBold)
+		v.Position = UDim2.new(0, 0, 0, 12)
+		v.Size = UDim2.new(1, 0, 0, 15)
+		v.TextTruncate = Enum.TextTruncate.AtEnd
+		return v
+	end
+
+	local SPinata = SideRow("PINATA X", 1)
+	local SStarterDel = SideRow("STARTER · 距删除", 2)
+	local SMegunaDel = SideRow("MEGUNA · 距删除", 3)
+	local SStarterState = SideRow("STARTER · 状态", 4)
+	local SMegunaState = SideRow("MEGUNA · 状态", 5)
+	local SOffset = SideRow("偏移 (固定)", 6)
+
+	-- 日志
+	local LogCard = Card(PinataPage, 2)
+	Pad(LogCard, 12, 8, 12, 8)
+	New("UIListLayout", { Padding = UDim.new(0, 3), SortOrder = Enum.SortOrder.LayoutOrder }, LogCard)
+	local LogTitle = Label(LogCard, "日志 · 什么时候放 / 什么时候删", 10, C.sub, Enum.Font.GothamBold)
+	LogTitle.Size = UDim2.new(1, 0, 0, 14)
+	LogTitle.LayoutOrder = 0
+	local logRows = {}
+	for i = 1, 6 do
+		local r = Label(LogCard, "", 11, C.sub, Enum.Font.Gotham)
+		r.Size = UDim2.new(1, 0, 0, 14)
+		r.TextTruncate = Enum.TextTruncate.AtEnd
+		r.LayoutOrder = i
+		logRows[i] = r
+	end
+
+	--------------------------------------------------------
+	-- 页面: 其他地图
+	--------------------------------------------------------
+	local OtherPage = Page(7)
+	local OtherCard = Card(OtherPage, 1, 44)
+	local OtherLbl = Label(OtherCard, "其他地图 · 不放塔", 12, C.sub, Enum.Font.GothamMedium, Enum.TextXAlignment.Center)
+	OtherLbl.Size = UDim2.new(1, 0, 1, 0)
+
+	--------------------------------------------------------
+	-- 刷新逻辑
+	--------------------------------------------------------
+	local function SetBadge(text, color)
+		Badge.Text = text
+		Tween(Badge, { TextColor3 = color })
+		Tween(Dot, { BackgroundColor3 = color })
+	end
+
+	local function RefreshClock()
+		local now = os.time()
+		local ev, inWin = EventInfo()
+		local done = GetDone() == ev
+		local target, phase, color, frac = ev, "", C.sub, 0
+
+		if inWin and not done then
+			if now < ev then
+				phase, color = "准备中", C.amber
+			else
+				phase, color = "进行中 · 剩 " .. Fmt(ev + AFTER_SECONDS - now), C.green
+			end
+			frac = math.clamp((now - (ev - PREP_SECONDS)) / (PREP_SECONDS + AFTER_SECONDS), 0, 1)
+		else
+			target = ev + 3600
+			phase = (inWin and done) and "本次已打过" or "等待下次"
+			color = (inWin and done) and C.green or C.sub
 		end
-		return nil
+
+		ClockTime.Text = os.date("%H:%M", target)
+		ClockPhase.Text = phase
+		ClockPhase.TextColor3 = color
+		ClockCount.Text = (target > now) and ("还有 " .. Fmt(target - now)) or "已到点"
+		Tween(BarFill, { Size = UDim2.new(frac, 0, 1, 0), BackgroundColor3 = color }, 0.3)
+	end
+
+	local function RefreshLobby()
+		-- Teleporter1
+		local folder = Workspace:FindFirstChild("Teleporters")
+		local t1 = folder and folder:FindFirstChild("Teleporter1")
+		if t1 then
+			local cur, max, text = ReadCount(t1)
+			T1Big.Text = text or "-"
+			local chosen = LobbyState.mode == "normal" and LobbyState.target == t1
+			local color, desc
+			if chosen then
+				color, desc = C.accent, "已选择 · " .. (LobbyState.status or "")
+			elseif cur and cur == 0 then
+				color, desc = C.green, "空 · 可进入"
+			elseif cur then
+				color, desc = C.gray, "有人"
+			else
+				color, desc = C.gray, "-"
+			end
+			T1Sub.Text = desc
+			T1Sub.TextColor3 = color
+			T1Big.TextColor3 = (cur and cur == 0) and C.green or C.text
+			Tween(T1Stroke, { Color = chosen and C.accent or C.line, Transparency = chosen and 0.2 or 0.3 })
+		else
+			T1Big.Text, T1Sub.Text = "-", "等待传送器加载"
+			T1Sub.TextColor3 = C.gray
+		end
+
+		-- Pinata 传送器
+		local list = GetPinataTeleporters()
+		local sumCur, sumMax, free = 0, 0, 0
+		for _, e in ipairs(list) do
+			local cur, max = ReadCount(e)
+			if cur then
+				sumCur = sumCur + cur
+				sumMax = sumMax + (max or 10)
+				if cur < (max or 10) then free = free + 1 end
+			end
+		end
+
+		local ptTarget = LobbyState.mode == "pinata" and LobbyState.target or nil
+		if ptTarget and ptTarget.Parent then
+			local _, _, text = ReadCount(ptTarget)
+			PTBig.Text = text or "-"
+			PTSub.Text = ptTarget.Name .. " · 已选 · " .. free .. " 个可进"
+			PTSub.TextColor3 = C.accent
+			Tween(PTStroke, { Color = C.accent, Transparency = 0.2 })
+		else
+			PTBig.Text = #list > 0 and (sumCur .. "/" .. sumMax) or "-"
+			PTSub.Text = #list > 0 and (free .. " / " .. #list .. " 个可进") or "等待 PinataTeleporters"
+			PTSub.TextColor3 = free > 0 and C.green or C.gray
+			Tween(PTStroke, { Color = C.line, Transparency = 0.3 })
+		end
+		PTBig.TextColor3 = C.text
+
+		-- 小格子
+		local names = {}
+		for _, e in ipairs(list) do table.insert(names, e.Name) end
+		local sig = table.concat(names, ",")
+		if sig ~= chipSig then
+			chipSig = sig
+			for _, c in pairs(chips) do c.frame:Destroy() end
+			chips = {}
+			for i, e in ipairs(list) do
+				local f = New("Frame", { BackgroundColor3 = C.btn, BorderSizePixel = 0, LayoutOrder = i }, ChipGrid)
+				Corner(f, 7)
+				local fs = Stroke(f, C.line, 1, 0.6)
+				local l = Label(f, "", 10, C.text, Enum.Font.GothamBold, Enum.TextXAlignment.Center)
+				l.Size = UDim2.new(1, 0, 1, 0)
+				chips[e] = { frame = f, stroke = fs, label = l, idx = i }
+			end
+		end
+		ChipTitle.Text = "Pinata 传送器 · " .. #list .. " 个"
+		for e, c in pairs(chips) do
+			if e.Parent then
+				local cur, max = ReadCount(e)
+				c.label.Text = c.idx .. " · " .. (cur and (cur .. "/" .. (max or 10)) or "-")
+				local color = C.green
+				if ptTarget == e then color = C.accent
+				elseif cur and cur >= (max or 10) then color = C.gray end
+				c.label.TextColor3 = color
+				Tween(c.stroke, { Color = color }, 0.15)
+			end
+		end
+
+		VMode.Text = WantPinata() and "Pinata 传送器" or "Teleporter1 (Stage 1)"
+		VMode.TextColor3 = WantPinata() and C.amber or C.text
+		VStay.Text = lobbySince and (Fmt(tick() - lobbySince) .. " / " .. Fmt(REJOIN_SECONDS)) or "-"
+	end
+
+	local function RefreshJJH()
+		local wave = "-"
+		pcall(function()
+			local info = Workspace:FindFirstChild("Info")
+			local w = info and info:FindFirstChild("Wave")
+			if w then wave = tostring(w.Value) end
+		end)
+		JWave.Text = wave
+
+		local timer = "-"
+		pcall(function()
+			local info = Workspace:FindFirstChild("Info")
+			local t = info and info:FindFirstChild("Time")
+			local tm = t and t:FindFirstChild("Timer")
+			if tm then
+				local v = tm.Value
+				timer = type(v) == "number" and Fmt(v) or tostring(v)
+			end
+		end)
+		JTime.Text = timer
+
+		pcall(function()
+			local g = LocalPlayer:FindFirstChild("Gold")
+			JGold.Text = g and Commas(g.Value) or "-"
+		end)
+
+		local pn = #Players:GetPlayers()
+		JPlayers.Text = tostring(pn)
+		JPlayers.TextColor3 = pn > 1 and C.amber or C.text
+
+		if JJH.stopAll then
+			JPhase.Text, JPhase.TextColor3 = "STOPPED (Wave 50)", C.red
+		elseif not jjhLoaded then
+			JPhase.Text, JPhase.TextColor3 = "读取塔数据…", C.gray
+		elseif not JJH.phaseDone then
+			JPhase.Text, JPhase.TextColor3 = "Miracle ×2 → Lv4", C.amber
+		else
+			JPhase.Text = JJH.upgradeBlocked and "全放 + 升级 (蜗牛暂停部分)" or "全放 + 升级"
+			JPhase.TextColor3 = JJH.upgradeBlocked and C.amber or C.green
+		end
+
+		JFarm.Text = jjhFarmKey and JJH_NAMES[jjhFarmKey] or "-"
+
+		local eqTotal, placedTotal = 0, 0
+		for key, u in pairs(tiles) do
+			local base = JJH_TOWERS[key]
+			local list = JJHTowers(base)
+			local levels = {}
+			for _, t in ipairs(list) do table.insert(levels, JJHLevel(t)) end
+			table.sort(levels)
+
+			local eq
+			if JJH_FARM[key] then eq = (jjhFarmKey == key) else eq = jjhEq[key] == true end
+			if eq then eqTotal = eqTotal + 1 end
+			placedTotal = placedTotal + #list
+
+			local target = JJH_TARGET[key] or 1
+			local color, state
+			if #list >= target then
+				color = C.green
+			elseif #list > 0 then
+				color = C.amber
+			elseif eq then
+				color = C.accent
+			else
+				color = C.gray
+			end
+
+			local lv = ""
+			if #levels > 0 then
+				local parts = {}
+				for _, l in ipairs(levels) do table.insert(parts, "Lv" .. l) end
+				lv = table.concat(parts, "｜")
+			end
+			state = (eq and "已带" or (JJH_FARM[key] and "非当前农场" or "未带")) .. (lv ~= "" and (" · " .. lv) or " · 未放置")
+
+			u.state.Text = state
+			u.state.TextColor3 = (#list > 0) and C.accent or (eq and C.sub or C.dim)
+			u.name.TextColor3 = (eq or #list > 0) and C.text or C.dim
+			u.count.Text = #list .. "/" .. target
+			u.count.TextColor3 = color
+			Tween(u.dot, { BackgroundColor3 = color })
+			Tween(u.stroke, { Color = color, Transparency = (#list > 0) and 0.35 or 0.7 })
+		end
+		JTilesTitle.Text = string.format("塔 · 带了 %d · 已放 %d (自己的)", eqTotal, placedTotal)
+	end
+
+	-- Y: X 越大越靠上 (Pinata 从上往下走)
+	local function MapY(x)
+		return (mapTop - x) / (mapTop - mapBottom) * COR_H
+	end
+
+	local function RefreshPinata()
+		local px = lastPinataX
+
+		-- 地图范围
+		if not px then
+			mapTop, mapBottom = nil, nil
+			PinataMark.Visible = false
+			for _, l in ipairs(lines) do
+				l.place.Visible, l.placeLbl.Visible, l.del.Visible, l.delLbl.Visible = false, false, false, false
+			end
+		else
+			if not mapTop then
+				mapTop = px + 14
+				mapBottom = mapTop - MAP_SPAN
+			end
+			local function Include(x)
+				if x + 10 > mapTop then mapTop = x + 10 end
+				if x - 10 < mapBottom then mapBottom = x - 10 end
+			end
+			Include(px)
+			for _, g in ipairs(GROUPS) do
+				if g.anchor then
+					Include(g.anchor.X)
+					Include(DeleteX(g))
+				end
+			end
+
+			PinataMark.Visible = true
+			PinataMark.Position = UDim2.new(0.5, 0, 0, math.clamp(MapY(px), 11, COR_H - 11))
+
+			for i, g in ipairs(GROUPS) do
+				local l = lines[i]
+				if g.anchor then
+					local py, dy = MapY(g.anchor.X), MapY(DeleteX(g))
+					l.place.Visible, l.placeLbl.Visible = true, true
+					l.place.Position = UDim2.new(0, 0, 0, py - 1)
+					l.placeLbl.Position = UDim2.new(0, 3, 0, math.clamp(py - 12, 0, COR_H - 11))
+					l.del.Visible, l.delLbl.Visible = true, true
+					l.del.Position = UDim2.new(0, 0, 0, dy - 1)
+					l.delLbl.Position = UDim2.new(1, -33, 0, math.clamp(dy - 12, 0, COR_H - 11))
+					l.del.BackgroundColor3 = g.selling and C.amber or C.red
+					l.del.Size = UDim2.new(1, 0, 0, g.selling and 3 or 2)
+				else
+					l.place.Visible, l.placeLbl.Visible, l.del.Visible, l.delLbl.Visible = false, false, false, false
+				end
+			end
+
+			AxisTop.Text = string.format("X %.0f", mapTop)
+			AxisBottom.Text = string.format("X %.0f", mapBottom)
+		end
+
+		-- 自己的塔 (来自列表) 画在走廊里
+		local alive = {}
+		if px and mapTop then
+			for gi, g in ipairs(GROUPS) do
+				for _, t in ipairs(GetGroupTowers(g)) do
+					alive[t] = true
+					local base
+					for _, b in ipairs(g.towers) do
+						if InstMatches(t.Name, b) then base = b break end
+					end
+					local ok, cf = pcall(function() return t:GetPivot() end)
+					if ok and cf and base then
+						local d = dots[t]
+						if not d then
+							local f = New("Frame", {
+								Size = UDim2.new(0, 18, 0, 18), AnchorPoint = Vector2.new(0.5, 0.5),
+								BackgroundColor3 = (base == "Kogane") and C.amber or (gi == 1 and C.accent or C.rose),
+								BorderSizePixel = 0, ZIndex = 4,
+							}, Corridor)
+							Corner(f, 9)
+							Stroke(f, C.bg, 1.5, 0)
+							local l = Label(f, TAG[base] or "??", 8, C.bg, Enum.Font.GothamBold, Enum.TextXAlignment.Center)
+							l.Size = UDim2.new(1, 0, 1, 0)
+							l.ZIndex = 5
+							d = { frame = f }
+							dots[t] = d
+						end
+						d.frame.Position = UDim2.new(LANE[base] or 0.5, 0, 0, math.clamp(MapY(cf.Position.X), 9, COR_H - 9))
+					end
+				end
+			end
+		end
+		for inst, d in pairs(dots) do
+			if not alive[inst] then
+				d.frame:Destroy()
+				dots[inst] = nil
+			end
+		end
+
+		-- 右侧信息
+		SPinata.Text = px and string.format("%.1f", px) or "-"
+
+		local function DelText(g)
+			if px and g.anchor then
+				local remain = Margin(g) + (g.anchor.X - px) * Dir(g)
+				return remain <= 0 and "即将删除" or string.format("还差 %.0f 格", remain), remain
+			end
+			return "-", nil
+		end
+
+		local t1, r1 = DelText(GROUPS[1])
+		local t2, r2 = DelText(GROUPS[2])
+		SStarterDel.Text, SStarterDel.TextColor3 = t1, (r1 and r1 <= 5) and C.amber or C.text
+		SMegunaDel.Text, SMegunaDel.TextColor3 = t2, (r2 and r2 <= 5) and C.amber or C.text
+
+		local function StateText(g)
+			if g.selling then return "删除中", C.red end
+			local expected, have = 0, #GetGroupTowers(g)
+			for _, base in ipairs(g.towers) do
+				if uuidByName[base] or base == "Kogane" then expected = expected + 1 end
+			end
+			if have >= expected and expected > 0 then
+				return string.format("就位 %d/%d", have, expected), C.green
+			end
+			return string.format("放置中 %d/%d", have, expected), C.amber
+		end
+		SStarterState.Text, SStarterState.TextColor3 = StateText(GROUPS[1])
+		SMegunaState.Text, SMegunaState.TextColor3 = StateText(GROUPS[2])
+		SOffset.Text = GROUPS[1].offset .. " / " .. GROUPS[2].offset
+
+		-- 日志
+		local now = os.time()
+		for i, row in ipairs(logRows) do
+			local e = Log[i]
+			if e then
+				local ago = now - e.t
+				row.Text = string.format("%s  %s", ago < 60 and (ago .. "s") or (math.floor(ago / 60) .. "m"), e.text)
+				row.TextColor3 = (e.kind == "sell") and C.red or C.green
+			else
+				row.Text = ""
+			end
+		end
 	end
 
 	local function Refresh()
-		local px = lastPinataX
-		VPinata.Text = px and string.format("%.1f", px) or "-"
+		local want = WantPinata()
+		local inGame = IsInGame()
+		local pinata = IsPinataMap()
+		local jjh = inGame and (not pinata) and IsJujutsuHigh()
 
-		-- 每组还差多少格 Pinata 就会删掉重放 (到 0 就重放)
-		local a, b = GapNumber(GROUPS[1], px), GapNumber(GROUPS[2], px)
-		VGap.Text = (a and string.format("%.0f", a) or "-") .. "  /  " .. (b and string.format("%.0f", b) or "-")
-		local soon = (a and a <= 3) or (b and b <= 3)
-		VGap.TextColor3 = soon and C.amber or C.text
+		LobbyPage.Visible = not inGame
+		PinataPage.Visible = pinata
+		JJHPage.Visible = jjh
+		OtherPage.Visible = inGame and (not pinata) and (not jjh)
 
-		StarterCount.Text = #GetGroupTowers(GROUPS[1]) .. " 座"
-		MegunaCount.Text = #GetGroupTowers(GROUPS[2]) .. " 座"
+		pcall(RefreshClock)
 
-		local usable, total = 0, 0
-		for _, g in ipairs(GROUPS) do
-			for _, base in ipairs(g.towers) do
-				total = total + 1
-				if uuidByName[base] or base == "Kogane" then usable = usable + 1 end
-			end
-		end
-		VReady.Text = usable .. " / " .. total
-
-		-- 下次 Pinata
-		local want, ev = WantPinata()
-		local _, _, secs = EventInfo()
-		if want then
-			VNext.Text = secs > 0 and string.format("%d:%02d 后开始", math.floor(secs / 60), secs % 60) or "进行中"
-			VNext.TextColor3 = C.amber
-		else
-			local untilPrep = (ev + 3600 - PREP_SECONDS) - os.time()
-			VNext.Text = string.format("%d 分后", math.max(0, math.floor(untilPrep / 60)))
-			VNext.TextColor3 = C.text
-		end
-
-		local badge, color
-		if IsPinataMap() then
-			if not px then
+		local badge, color, status
+		if pinata then
+			if not lastPinataX then
 				badge, color = "NO PINATA", C.gray
 			elseif GROUPS[1].selling or GROUPS[2].selling then
 				badge, color = "RESET", C.amber
 			else
 				badge, color = "ACTIVE", C.green
 			end
-		elseif IsInGame() then
-			badge = IsJujutsuHigh() and "JUJUTSU" or "OTHER MAP"
-			color = IsJujutsuHigh() and C.green or C.gray
+			status = string.format("Pinata · 我的塔 %d 座", #MyTowers())
+			pcall(RefreshPinata)
+		elseif jjh then
+			badge, color = "JUJUTSU", C.green
+			status = string.format("JujutsuHigh · 我的塔 %d 座", #MyTowers())
+			pcall(RefreshJJH)
+		elseif inGame then
+			badge, color, status = "OTHER MAP", C.gray, LobbyState.status
 		else
 			badge = want and "→ PINATA" or "LOBBY"
 			color = want and C.amber or C.accent
+			status = LobbyState.status
+			pcall(RefreshLobby)
 		end
 
-		local status = LobbyState.status
-		if LobbyState.countText ~= "-" and not IsInGame() then
-			status = status .. " · " .. LobbyState.countText
-		end
-		Status.Text = status
-
-		Badge.Text = badge
-		Tween(Badge, { TextColor3 = color })
-		Tween(Dot, { BackgroundColor3 = color })
+		SetBadge(badge, color)
+		Status.Text = status or ""
 	end
 
 	task.spawn(function()
@@ -1752,7 +2397,9 @@ local uiOk, uiErr = pcall(function()
 		end
 	end)
 
-	-- 拖动 (按住标题栏)
+	--------------------------------------------------------
+	-- 拖动 / 开关
+	--------------------------------------------------------
 	do
 		local dragging, dragStart, startPos
 		Header.InputBegan:Connect(function(input)
@@ -1773,7 +2420,6 @@ local uiOk, uiErr = pcall(function()
 		end)
 	end
 
-	-- 右侧可拖动小圆按钮, 点击开关面板
 	local ToggleBtn = New("TextButton", {
 		Name = "ToggleBtn", Size = UDim2.new(0, 40, 0, 40), Position = UDim2.new(1, -64, 0.5, -20),
 		BackgroundColor3 = C.bg, Text = "P", TextColor3 = C.accent, TextSize = 15,
