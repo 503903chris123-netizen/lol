@@ -716,25 +716,24 @@ local function StandPosition(elev)
 	return ok and pivot and pivot.Position or nil
 end
 
--- 长按互动键 (默认 E, 有 ProximityPrompt 就用它的键和长按时长)
-local function HoldInteract(elev)
-	local prompt = FindPrompt(elev)
-	local hold = 2  -- 每次长按 2 秒, 循环
-	local key = (prompt and prompt.KeyboardKeyCode) or Enum.KeyCode.E
-	if key == Enum.KeyCode.Unknown then key = Enum.KeyCode.E end
+-- 激活 ProximityPrompt: 不模拟按键 / 鼠标 (点击会进不去)
+-- 优先 fireproximityprompt (先把长按时间设成 0); 没有这个函数就用 InputHoldBegin / InputHoldEnd
+local function ActivatePrompt(prompt)
+	if not prompt then return false end
 
-	local vim
-	pcall(function() vim = game:GetService("VirtualInputManager") end)
+	pcall(function() prompt.HoldDuration = 0 end)
 
-	if vim then
-		pcall(function() vim:SendKeyEvent(true, key, false, game) end)
-		task.wait(hold)
-		pcall(function() vim:SendKeyEvent(false, key, false, game) end)
-	elseif prompt then
-		pcall(function() prompt:InputHoldBegin() end)
-		task.wait(hold)
-		pcall(function() prompt:InputHoldEnd() end)
+	if typeof(fireproximityprompt) == "function" then
+		local ok = pcall(function() fireproximityprompt(prompt) end)
+		if ok then return true end
 	end
+
+	local ok = pcall(function()
+		prompt:InputHoldBegin()
+		task.wait(0.15)
+		prompt:InputHoldEnd()
+	end)
+	return ok
 end
 
 -- 读传送器人数: 返回 当前, 上限, 文字 (找不到返回 nil)
@@ -853,8 +852,15 @@ local function SetMode(mode)
 	end
 end
 
--- Pinata: 走到人数 < 10 的传送器, 长按互动键; 满人了 (还没到的时候) 就换
+-- Pinata: 走到人数 < 10 的传送器, 用 ProximityPrompt 触发 (不模拟按键); 满人了就换另一个
+local PRESS_GRACE = 20     -- 第一次按之后这么多秒内, 当作"已经进去了", 不会因为满人而换走
+local SKIP_SECONDS = 20    -- 被换掉的传送器这么久内不再选
+local WALK_TIMEOUT = 15    -- 走路最多这么久, 还没到就直接 TP 到传送器旁边
+
 local function PinataLobby()
+	if LobbyState.mode ~= "pinata" then
+		LobbyState.skip, LobbyState.pressedAt, LobbyState.firstPress = {}, {}, {}
+	end
 	SetMode("pinata")
 
 	local list = GetPinataTeleporters()
@@ -866,32 +872,41 @@ local function PinataLobby()
 	local root = GetRoot()
 	if not root then LobbyState.status = "等待角色" return end
 
+	local function recentlyPressed(e)
+		local t = LobbyState.firstPress[e]
+		return t ~= nil and tick() - t < PRESS_GRACE
+	end
+
 	local target = LobbyState.target
 	if target and not target.Parent then target = nil end
 
-	-- 目标满人了, 并且自己还没站在里面 -> 换一个
-	if target then
-		local pos = StandPosition(target)
-		local near = pos and FlatDist(root.Position, pos) <= NEAR_DIST
-		if (not near) and IsFull(target) then
-			target = nil
-		end
+	-- 目标满人了, 而且不是刚按过的 (自己可能就在里面) -> 换一个, 不管离得近不近
+	if target and IsFull(target) and not recentlyPressed(target) then
+		LobbyState.skip[target] = tick() + SKIP_SECONDS
+		LobbyState.firstPress[target] = nil
+		LobbyState.pressedAt[target] = nil
+		target = nil
 	end
 
 	if not target then
 		for _, e in ipairs(list) do
-			if not IsFull(e) then
+			if (not IsFull(e)) and tick() >= (LobbyState.skip[e] or 0) then
 				target = e
 				break
 			end
 		end
 		if not target then
+			-- 没有可选的: 把已经不满的从跳过表里放出来, 下一轮重选
+			for e in pairs(LobbyState.skip) do
+				if not IsFull(e) then LobbyState.skip[e] = nil end
+			end
 			LobbyState.target = nil
 			LobbyState.status = "传送器都满了, 等待"
 			return
 		end
 		LobbyState.target = target
-		LobbyState.heldAt = 0
+		LobbyState.firstPress[target] = nil
+		LobbyState.pressedAt[target] = nil
 	end
 
 	local _, _, text = ReadCount(target)
@@ -900,38 +915,62 @@ local function PinataLobby()
 	local pos = StandPosition(target)
 	if not pos then LobbyState.status = "找不到传送器位置" return end
 
-	local function abort()
-		local want = WantPinata()
-		return IsInGame() or (not want) or LobbyState.target ~= target
-			or ((not IsFull(target)) == false and FlatDist((GetRoot() or root).Position, pos) > NEAR_DIST)
-	end
-
+	-- 离得远: 先走过去; 走了 WALK_TIMEOUT 秒还没到 (卡住了) 就直接 TP 到传送器旁边
 	if FlatDist(root.Position, pos) > NEAR_DIST then
 		LobbyState.status = "走向 " .. target.Name
-		WalkTo(pos, abort)
+		local chosen = target
+		WalkTo(pos, function()
+			return IsInGame() or (not WantPinata()) or LobbyState.target ~= chosen
+		end, WALK_TIMEOUT)
+
+		root = GetRoot()
+		if root and LobbyState.target == chosen and (not IsInGame()) and WantPinata()
+			and FlatDist(root.Position, pos) > NEAR_DIST then
+			LobbyState.status = "走不到, TP 到 " .. chosen.Name
+			pcall(function() root.CFrame = CFrame.new(pos + Vector3.new(0, 3, 0)) end)
+		end
 		return
 	end
 
-	-- 在传送器旁边就一直长按 (每次 2 秒, 循环)
-	LobbyState.status = "长按互动 · " .. target.Name
-	LobbyState.heldAt = tick()
-	HoldInteract(target)
+	-- 在传送器旁边: 触发互动提示; 按过之后每 HOLD_RETRY 秒还没进游戏就再按一次
+	local prompt = FindPrompt(target)
+	local last = LobbyState.pressedAt[target] or 0
+	if last == 0 or tick() - last >= HOLD_RETRY then
+		if prompt and prompt.Enabled == false then
+			LobbyState.status = "互动不可用 · " .. target.Name
+			return
+		end
+		LobbyState.status = "互动 · " .. target.Name
+		LobbyState.pressedAt[target] = tick()
+		if not LobbyState.firstPress[target] then
+			LobbyState.firstPress[target] = tick()
+		end
+		if not ActivatePrompt(prompt) then
+			LobbyState.status = "找不到互动提示 · " .. target.Name
+		end
+	else
+		LobbyState.status = "已触发, 等待开始 · " .. target.Name
+	end
 end
 
--- Teleporter1: 瞬间 TP 到传送器上方, 再绕圈 tween 让传送器检测到玩家进入 (不绕圈进不去)
+-- Teleporter1: 绕圈 tween 让传送器检测到玩家进入 (不绕圈进不去)
+--   hardTP = true: 先瞬间 TP 到传送器上方再绕圈 (第一次不 TP, 直接绕; 5 秒没进才 TP 重来)
 local CIRCLE_RADIUS = 4.5
 local CIRCLE_STEPS = 12
 local CIRCLE_STEP_TIME = 0.08
+local ENTER_WAIT = 5       -- 绕圈后这么多秒还没进传送器 -> 重新 TP 绕圈
 
-local function TeleportInto(elev)
+local function TeleportInto(elev, hardTP)
 	local root = GetRoot()
 	if not root then return false end
 
 	local okPivot, pivot = pcall(function() return elev:GetPivot() end)
 	if not okPivot or not pivot then return false end
 
-	-- 不先 TP 过去, 直接从当前位置开始绕圈 (第一步 tween 就会把人带到传送器旁)
 	local center = pivot.Position + Vector3.new(0, 3, 0)
+	if hardTP then
+		pcall(function() root.CFrame = CFrame.new(center) end)
+	end
 
 	for i = 1, CIRCLE_STEPS do
 		if IsInGame() then return true end
@@ -957,8 +996,12 @@ local function TeleportInto(elev)
 	return true
 end
 
--- 普通关: 走进第一个传送器, 选关并开始 (和主脚本同样的 remote)
+-- 普通关: 进第一个传送器, 选关并开始 (和主脚本同样的 remote)
+--   没进去 (绕圈后 ENTER_WAIT 秒内人数 / 位置都不对) -> 下一轮 TP + 绕圈重来
 local function NormalLobby()
+	if LobbyState.mode ~= "normal" then
+		LobbyState.enterTry = 0
+	end
 	SetMode("normal")
 
 	local folder = Workspace:FindFirstChild("Teleporters")
@@ -985,9 +1028,39 @@ local function NormalLobby()
 		return
 	end
 
-	-- 目标是 Teleporter1: 时刻绕圈 (每次循环都绕一整圈, 不管离得远不远)
-	LobbyState.status = "绕圈 · " .. elev.Name
-	TeleportInto(elev)
+	-- 算"进去了": 人在传送器范围内, 并且人数 >= 1 (读不到人数就只看位置)
+	local function Inside()
+		local r = GetRoot()
+		if not r then return false end
+		if FlatDist(r.Position, pos) > 8 then return false end
+		local cur = ReadCount(elev)
+		return cur == nil or cur >= 1
+	end
+
+	if not Inside() then
+		local try = LobbyState.enterTry or 0
+		if try == 0 then
+			LobbyState.status = "绕圈 · " .. elev.Name
+		else
+			LobbyState.status = "重新 TP 绕圈 (第 " .. (try + 1) .. " 次) · " .. elev.Name
+		end
+
+		TeleportInto(elev, try > 0)
+
+		-- 绕完圈后最多等 ENTER_WAIT 秒确认进去了
+		local t0 = tick()
+		while tick() - t0 < ENTER_WAIT do
+			if IsInGame() then return end
+			if Inside() then break end
+			task.wait(0.2)
+		end
+
+		if not Inside() then
+			LobbyState.enterTry = try + 1
+			return   -- 下一轮: TP 过去重新绕圈
+		end
+	end
+	LobbyState.enterTry = 0
 
 	-- 进去之后如果有别人 (人数 > 1, 含自己) -> leave
 	local cur = ReadCount(elev)
