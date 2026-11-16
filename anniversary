@@ -1,4 +1,3 @@
-
 --========================================================--
 -- PINATA STARTER (含大厅自动进传送器)
 --  局内 (Map 是 Anniversary / 场上有 Pinata): 跟着 Workspace.Mobs.Pinata 放塔 / 升级 / 开领域
@@ -1044,6 +1043,33 @@ task.spawn(function()
 			LobbyState.countText = "-"
 		else
 			pcall(LobbyStep)
+		end
+	end
+end)
+
+--========================================================--
+-- 大厅卡住检测: 连续 REJOIN_SECONDS 秒没进游戏 -> 自动 rejoin
+--========================================================--
+
+local REJOIN_SECONDS = 180   -- 在大厅连续待这么久 (秒) 还没进游戏就 rejoin
+local TeleportService = game:GetService("TeleportService")
+local lobbySince = nil
+
+task.spawn(function()
+	while task.wait(1) do
+		if IsInGame() then
+			lobbySince = nil
+		else
+			lobbySince = lobbySince or tick()
+			local waited = tick() - lobbySince
+			if waited >= REJOIN_SECONDS then
+				print("[PinataStarter] 大厅超过 " .. REJOIN_SECONDS .. " 秒没进游戏, rejoin")
+				LobbyState.status = "卡住, rejoin"
+				lobbySince = tick() + 30   -- 防止重复触发: 给传送留 30 秒
+				pcall(function()
+					TeleportService:Teleport(game.PlaceId, LocalPlayer)
+				end)
+			end
 		end
 	end
 end)
