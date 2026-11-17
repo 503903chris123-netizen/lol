@@ -11,13 +11,16 @@
 --      人数 < 10 的传送器, 触发互动提示 (不模拟按键); 满人就换另一个
 --    其余时间 / Pinata 打完之后 -> 进第一个传送器 (Workspace.Teleporters.Teleporter1) 打普通关
 --  结算界面出现 -> 自动 ExitGame 回大厅; 大厅超过 3 分钟没进游戏 -> 自动 rejoin
+--  脚本一启动就开 Max Performance (只在客户端降级视觉, 不动结构; 设置在 PERF_* 变量)
 --  UI: 大厅 (Teleporter1 / Pinata 传送器人数 + 下次刷新) · JujutsuHigh (带了的塔 / 放置的塔) · Pinata (走廊小地图 + 日志)
 --========================================================--
 
 local environment = getgenv()
 
 -- 用 JobId 判断是否已在当前服务器运行
-if environment.PinataStarterJob == game.JobId then
+print("[PinataStarter] 脚本开始加载")
+if environment.PinataStarterJob == game.JobId and not environment.PinataStarterForce then
+	warn("[PinataStarter] 这个服务器里已经运行过一次了, 这次直接退出 (想强制重跑: getgenv().PinataStarterForce = true 再执行, 或者重进服务器)")
 	return
 end
 environment.PinataStarterJob = game.JobId
@@ -29,6 +32,162 @@ local PathfindingService = game:GetService("PathfindingService")
 local TweenService = game:GetService("TweenService")
 
 local LocalPlayer = Players.LocalPlayer
+
+--========================================================--
+-- MAX PERFORMANCE (脚本一启动就开, 不管在哪张图)
+--   只在客户端删视觉效果: 灯光 (Light) / 贴图 (Decal / Texture / SurfaceAppearance / MeshPart.TextureID / SpecialMesh) / 粒子 / 阴影 / 后处理 / 别人的角色外观
+--   绝不删: Part / Model / Value / Remote / Prompt / Gui, 也不碰 Teleporters / PinataTeleporters / Towers / Mobs 的结构
+--   所以放塔 / 升级 / Owner 判断 / Map 检测 / 传送器 / Pinata 追踪 都不受影响
+--========================================================--
+
+local PERF_ENABLED = true
+local PERF_FPS_CAP = 0              -- 0 = 不限帧; 想限制就写 60 / 144
+local PERF_DISABLE_3D = false       -- true = 直接关掉 3D 渲染 (最省, 但画面全黑, 只靠 UI 看状态)
+local PERF_STRIP_PLAYERS = true     -- 别人的角色: 删配饰 / 衣服 / 脸
+local PERF_SKIP = { Teleporters = true, PinataTeleporters = true }   -- 这些文件夹里面完全不动
+
+if PERF_ENABLED then
+	task.spawn(function()
+		local okPerf, errPerf = pcall(function()
+		local Lighting = game:GetService("Lighting")
+		local RunService = game:GetService("RunService")
+
+		-- 全局渲染设置
+		pcall(function() settings().Rendering.QualityLevel = Enum.QualityLevel.Level01 end)
+		pcall(function() settings().Rendering.MeshPartDetailLevel = Enum.MeshPartDetailLevel.Level04 end)
+		pcall(function() settings().Physics.AllowSleep = true end)
+		pcall(function() if setfpscap then setfpscap(PERF_FPS_CAP) end end)
+		pcall(function() if PERF_DISABLE_3D then RunService:Set3dRenderingEnabled(false) end end)
+
+		-- 光照
+		local function ApplyLighting()
+			pcall(function() Lighting.GlobalShadows = false end)
+			pcall(function() Lighting.FogEnd = 9e9; Lighting.FogStart = 9e9 end)
+			pcall(function() Lighting.ShadowSoftness = 0 end)
+			pcall(function() Lighting.EnvironmentDiffuseScale = 0; Lighting.EnvironmentSpecularScale = 0 end)
+			pcall(function() if sethiddenproperty then sethiddenproperty(Lighting, "Technology", Enum.Technology.Compatibility) end end)
+			-- 没有天空 / 灯光之后场景全靠环境光, 调成统一的亮灰色, 不会黑屏
+			pcall(function()
+				Lighting.Ambient = Color3.fromRGB(190, 190, 190)
+				Lighting.OutdoorAmbient = Color3.fromRGB(190, 190, 190)
+				Lighting.Brightness = 1
+				Lighting.ClockTime = 12
+			end)
+			for _, c in ipairs(Lighting:GetChildren()) do
+				if c:IsA("PostEffect") or c:IsA("Atmosphere") or c:IsA("Clouds") or c:IsA("Sky") then
+					pcall(function() c:Destroy() end)
+				end
+			end
+		end
+		ApplyLighting()
+		Lighting.ChildAdded:Connect(function(c)
+			if c:IsA("PostEffect") or c:IsA("Atmosphere") or c:IsA("Clouds") or c:IsA("Sky") then
+				task.defer(function() pcall(function() c:Destroy() end) end)
+			end
+		end)
+
+		-- 地形 / 水
+		pcall(function()
+			local terrain = Workspace:FindFirstChildOfClass("Terrain")
+			if terrain then
+				terrain.WaterWaveSize, terrain.WaterWaveSpeed = 0, 0
+				terrain.WaterReflectance, terrain.WaterTransparency = 0, 1
+				if sethiddenproperty then sethiddenproperty(terrain, "Decoration", false) end
+			end
+		end)
+
+		local function InSkipped(inst)
+			local p = inst
+			while p and p ~= Workspace do
+				if PERF_SKIP[p.Name] and p.Parent == Workspace then return true end
+				p = p.Parent
+			end
+			return false
+		end
+
+		local function IsOtherCharacter(inst)
+			local model = inst:FindFirstAncestorOfClass("Model")
+			while model do
+				local plr = Players:GetPlayerFromCharacter(model)
+				if plr then return plr ~= LocalPlayer end
+				model = model.Parent and model.Parent:FindFirstAncestorOfClass("Model")
+			end
+			return false
+		end
+
+		-- 处理单个对象 (只做视觉降级, 不删结构)
+		local function Strip(inst)
+			if InSkipped(inst) then return end
+
+			if inst:IsA("BasePart") then
+				inst.CastShadow = false
+				inst.Reflectance = 0
+				inst.Material = Enum.Material.SmoothPlastic
+				if inst:IsA("MeshPart") then
+					pcall(function() inst.RenderFidelity = Enum.RenderFidelity.Performance end)
+					pcall(function() inst.TextureID = "" end)
+				end
+			elseif inst:IsA("Decal") or inst:IsA("Texture") or inst:IsA("SurfaceAppearance")
+				or inst:IsA("ParticleEmitter") or inst:IsA("Trail") or inst:IsA("Beam")
+				or inst:IsA("Smoke") or inst:IsA("Fire") or inst:IsA("Sparkles") or inst:IsA("Explosion")
+				or inst:IsA("Highlight") or inst:IsA("SelectionBox") then
+				pcall(function() inst:Destroy() end)
+			elseif inst:IsA("Light") then
+				-- 灯光: PointLight / SpotLight / SurfaceLight 直接删
+				pcall(function() inst:Destroy() end)
+			elseif inst:IsA("SpecialMesh") then
+				pcall(function() inst.TextureId = "" end)
+			elseif PERF_STRIP_PLAYERS and (inst:IsA("Accessory") or inst:IsA("Clothing")
+				or inst:IsA("ShirtGraphic") or inst:IsA("BodyColors")) then
+				if IsOtherCharacter(inst) then pcall(function() inst:Destroy() end) end
+			end
+		end
+
+		-- 新出现的对象: 先攒起来, 下一帧再批量处理 (怪物 / 特效一次出很多个时不卡)
+		local queue, qn = {}, 0
+		Workspace.DescendantAdded:Connect(function(inst)
+			qn = qn + 1
+			queue[qn] = inst
+		end)
+
+		task.spawn(function()
+			while true do
+				RunService.Heartbeat:Wait()
+				local n = math.min(qn, 400)
+				for i = 1, n do
+					local inst = queue[i]
+					if inst and inst.Parent then pcall(Strip, inst) end
+				end
+				if n > 0 then
+					table.move(queue, n + 1, qn, 1)
+					for i = qn - n + 1, qn do queue[i] = nil end
+					qn = qn - n
+				end
+			end
+		end)
+
+		-- 现有的全部处理一遍 (分批, 避免启动时卡一下)
+		local count = 0
+		for _, inst in ipairs(Workspace:GetDescendants()) do
+			pcall(Strip, inst)
+			count = count + 1
+			if count % 300 == 0 then RunService.Heartbeat:Wait() end
+		end
+
+		-- 别人的角色: 之后有人进 / 重生也处理
+		if PERF_STRIP_PLAYERS then
+			for _, plr in ipairs(Players:GetPlayers()) do
+				if plr ~= LocalPlayer and plr.Character then
+					for _, d in ipairs(plr.Character:GetDescendants()) do pcall(Strip, d) end
+				end
+			end
+		end
+
+		print("[PinataStarter] Max Performance 已开启 · 处理了 " .. count .. " 个对象")
+		end)
+		if not okPerf then warn("[PinataStarter] Max Performance 出错 (不影响其余功能): " .. tostring(errPerf)) end
+	end)
+end
 
 --========================================================--
 -- 设置
@@ -1907,14 +2066,14 @@ local uiOk, uiErr = pcall(function()
 	end
 
 	--------------------------------------------------------
-	-- 页面: Pinata (走廊小地图 + 信息 + 日志)
+	-- 页面: Pinata (单条道路小地图 + 信息 + 日志)
 	--------------------------------------------------------
 	local PinataPage = Page(6)
 
 	local COR_W, COR_H = 124, 232
 	local MapCard = Card(PinataPage, 1, COR_H + 38)
 
-	local MapTitle = Label(MapCard, "MINIMAP  ·  Pinata ↓ 前进", 10, C.sub, Enum.Font.GothamBold)
+	local MapTitle = Label(MapCard, "ROAD  ·  Pinata 从上往下走", 10, C.sub, Enum.Font.GothamBold)
 	MapTitle.Position = UDim2.new(0, 12, 0, 8)
 	MapTitle.Size = UDim2.new(1, -24, 0, 12)
 
@@ -1925,15 +2084,38 @@ local uiOk, uiErr = pcall(function()
 	Corner(Corridor, 10)
 	Stroke(Corridor, C.line, 1, 0.2)
 
-	-- 走廊里的车道线 (5 条: Miracle / Harvester / King / Kogane / Amplifying)
-	local LANE = { MiracleSorcerer = 0.14, HarvesterCurse = 0.32, KingOfCursesEvo = 0.52, Kogane = 0.70, AmplifyingSorcerer = 0.88 }
-	local TAG = { MiracleSorcerer = "Mi", HarvesterCurse = "Ha", KingOfCursesEvo = "Ki", Kogane = "Ko", AmplifyingSorcerer = "Am" }
-	for _, x in pairs(LANE) do
+	-- 一条道路: Pinata 从最上方沿 X 轴往下走; 所有塔都在这条路上 (Y / Z 固定, 只有 X 不同)
+	--   同一高度的塔在路面上左右排开, 只是为了不重叠, 不代表真实的左右位置
+	local ROAD_W = 78
+	local Road = New("Frame", {
+		Size = UDim2.new(0, ROAD_W, 1, 0), AnchorPoint = Vector2.new(0.5, 0),
+		Position = UDim2.new(0.5, 0, 0, 0), BackgroundColor3 = C.card, BorderSizePixel = 0, ZIndex = 1,
+	}, Corridor)
+	Stroke(Road, C.line, 1, 0.35)
+	-- 路中间的虚线
+	for i = 0, 22 do
 		New("Frame", {
-			Size = UDim2.new(0, 1, 1, 0), Position = UDim2.new(x, 0, 0, 0),
-			BackgroundColor3 = C.line, BackgroundTransparency = 0.6, BorderSizePixel = 0,
+			Size = UDim2.new(0, 2, 0, 7), AnchorPoint = Vector2.new(0.5, 0),
+			Position = UDim2.new(0.5, 0, 0, i * 11 + 3), BackgroundColor3 = C.line,
+			BackgroundTransparency = 0.45, BorderSizePixel = 0, ZIndex = 1,
 		}, Corridor)
 	end
+	local RoadTop = Label(Corridor, "▼ START", 8, C.dim, Enum.Font.GothamBold, Enum.TextXAlignment.Center)
+	RoadTop.Size = UDim2.new(1, 0, 0, 10)
+	RoadTop.Position = UDim2.new(0, 0, 0, 1)
+	RoadTop.ZIndex = 2
+	local RoadEnd = Label(Corridor, "END", 8, C.dim, Enum.Font.GothamBold, Enum.TextXAlignment.Center)
+	RoadEnd.Size = UDim2.new(1, 0, 0, 10)
+	RoadEnd.Position = UDim2.new(0, 0, 1, -11)
+	RoadEnd.ZIndex = 2
+
+	-- 塔在路面上的横向位置 (占 ROAD_W 的比例换算到走廊宽度)
+	local function RoadX(frac) return 0.5 + (frac - 0.5) * (ROAD_W - 22) / COR_W end
+	local LANE = {
+		MiracleSorcerer = RoadX(0.15), HarvesterCurse = RoadX(0.85),
+		KingOfCursesEvo = RoadX(0.0), Kogane = RoadX(0.5), AmplifyingSorcerer = RoadX(1.0),
+	}
+	local TAG = { MiracleSorcerer = "Mi", HarvesterCurse = "Ha", KingOfCursesEvo = "Ki", Kogane = "Ko", AmplifyingSorcerer = "Am" }
 
 	-- 顶部 / 底部 X 刻度
 	local AxisTop = Label(MapCard, "", 9, C.dim, Enum.Font.Gotham, Enum.TextXAlignment.Left)
