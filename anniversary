@@ -235,6 +235,8 @@ local KOGANE_UUID = "f4794151-3ac0-47a5-8dab-05829561c830"
 local KOGANE_ANGLES = CFrame.Angles(-3.1415927410125732, 0, -3.1415927410125732)
 
 local AMPLIFYING = "AmplifyingSorcerer"   -- 实际名字不确定: 名字里带 "amplif" 的都算
+local JJH_FALLBACK_UUID = "348a7d3c-8318-4653-87ce-d81057351072"   -- fingerbearer 的固定 uuid (GetAllData 里没读到时用)
+local JJH_FALLBACK = "fingerbearerawk"    -- 仅 JujutsuHigh: 没有 Miracle 时用它代替 (名字里带这个词的都算, 不分大小写); Pinata 模式不放
 local realName = {}                        -- [基础塔名] = GetAllData 里查到的真实塔名 (去掉编号)
 
 --========================================================--
@@ -355,6 +357,9 @@ end
 
 -- 场上的塔实例是否属于这个塔名
 local function InstMatches(instName, base)
+	if string.lower(base) == JJH_FALLBACK then
+		return string.find(string.lower(tostring(instName)), JJH_FALLBACK, 1, true) ~= nil
+	end
 	if base == AMPLIFYING then
 		return string.find(string.lower(tostring(instName)), "amplif", 1, true) ~= nil
 	end
@@ -1428,6 +1433,52 @@ task.spawn(function()
 end)
 
 --========================================================--
+-- 大厅自动领取 (只在大厅):
+--   按顺序每 0.3 秒领一个: Anniversary 任务 Damage / Defeat / Kill / Party / Open / AllQuests, 再 ClaimTutorial 参数 1-10, 循环
+--========================================================--
+
+local QUEST_CLAIMS = { "Damage", "Defeat", "Kill", "Party", "Open", "AllQuests" }
+local TUTORIAL_MAX = 10
+local CLAIM_DELAY = 0.3   -- 每个领取之间间隔 (按顺序一个一个来, 不同时发)
+
+local function FindRemote(...)
+	local o = ReplicatedStorage
+	for _, n in ipairs({ ... }) do
+		o = o and o:FindFirstChild(n)
+	end
+	return o
+end
+
+-- 顺序: 6 个任务, 再 ClaimTutorial 1-10, 循环; 一进游戏立刻停
+task.spawn(function()
+	local questRemote, tutRemote
+	while true do
+		if IsInGame() then
+			task.wait(1)
+		else
+			questRemote = questRemote or FindRemote("Remotes", "Quests", "ClaimQuest")
+			tutRemote = tutRemote or FindRemote("Remotes", "Anniversary", "ClaimTutorial")
+
+			if questRemote then
+				for _, q in ipairs(QUEST_CLAIMS) do
+					if IsInGame() then break end
+					pcall(function() questRemote:FireServer("Anniversary", q) end)
+					task.wait(CLAIM_DELAY)
+				end
+			end
+			if tutRemote then
+				for i = 1, TUTORIAL_MAX do
+					if IsInGame() then break end
+					pcall(function() tutRemote:FireServer(i) end)
+					task.wait(CLAIM_DELAY)
+				end
+			end
+			if not (questRemote or tutRemote) then task.wait(1) end
+		end
+	end
+end)
+
+--========================================================--
 -- 大厅卡住检测: 连续 REJOIN_SECONDS 秒没进游戏 -> 自动 rejoin
 --========================================================--
 
@@ -1486,9 +1537,21 @@ local function IsJujutsuHigh()
 	return map ~= nil and map:FindFirstChild("JujutsuHigh") ~= nil
 end
 
+-- 没有 Miracle 时 (GetAllData 里找不到) 用 fingerbearerawk 代替 BASIC 的位置; 只在 JujutsuHigh 用
+local jjhBasicFallback = false
+
+-- 目标数量: Miracle 要 2 个; 代替它的 fingerbearerawk 只当普通塔, 放 1 个
+local function JJHTarget(key)
+	if key == "BASIC" and jjhBasicFallback then return 1 end
+	return JJH_TARGET[key] or 1
+end
+
 -- 塔名匹配: Amplifying 名字里带 "amplif"; Meguna 认 KingOfCursesEvo 或 meguna 开头
 local function JJHMatch(key, instName)
 	local n = string.lower(tostring(instName))
+	if key == "BASIC" and jjhBasicFallback then
+		return string.find(n, JJH_FALLBACK, 1, true) ~= nil
+	end
 	if key == "AMPLIFYING" then
 		return string.find(n, "amplif", 1, true) ~= nil
 	end
@@ -1541,6 +1604,32 @@ local function JJHRefresh()
 		end
 	end
 
+	-- 没有 Miracle -> 用 fingerbearerawk 代替 (放置 / 升级 / 阶段 1 都按 BASIC 处理)
+	local fallback = false
+	if not newUUID.BASIC then
+		for _, t in pairs(data.Towers) do
+			if type(t) == "table" and t.Name and t.UUID
+				and string.find(string.lower(tostring(t.Name)), JJH_FALLBACK, 1, true) then
+				local eq = t.Equipped == true
+				if not newUUID.BASIC or (eq and not newEq.BASIC) then
+					newUUID.BASIC = t.UUID
+					newEq.BASIC = eq
+				end
+				fallback = true
+			end
+		end
+		-- GetAllData 里读不到它的 uuid 时, 用固定 uuid
+		if not newUUID.BASIC then
+			newUUID.BASIC = JJH_FALLBACK_UUID
+			newEq.BASIC = false
+			fallback = true
+		end
+	end
+	if fallback ~= jjhBasicFallback then
+		print("[JujutsuHigh] " .. (fallback and "没有 Miracle, 改用 FingerBearerAwk" or "找到 Miracle, 恢复使用 Miracle"))
+	end
+	jjhBasicFallback = fallback
+
 	jjhUUID, jjhEq, jjhLoaded = newUUID, newEq, true
 end
 
@@ -1556,12 +1645,13 @@ local function JJHPlace(key)
 	if JJH.stopAll or not jjhLoaded then return false end
 
 	local towerName = JJH_TOWERS[key]
+	if key == "BASIC" and jjhBasicFallback then towerName = JJH_FALLBACK end
 
 	-- Kogane 要等自己的 Meguna 先放下
 	if key == "KOGANE" and #JJHTowers("MEGUNA") == 0 then return false end
 
 	-- 自己列表里已经够数了就不放
-	if #JJHTowers(key) >= (JJH_TARGET[key] or 1) then return false end
+	if #JJHTowers(key) >= JJHTarget(key) then return false end
 
 	-- 刚发过放置请求, 等它出现在列表里
 	if tick() - (pendingPlace[towerName] or 0) < PLACE_GUARD then return false end
@@ -1603,7 +1693,8 @@ task.spawn(function()
 
 			if not JJH.phaseDone then
 				-- 没有 Miracle 可放就直接跳过阶段 1
-				if not jjhUUID.BASIC then
+				-- 没有 Miracle (包括用 fingerbearerawk 代替时) 不走 Miracle 阶段, 直接放其他塔
+				if not jjhUUID.BASIC or jjhBasicFallback then
 					JJH.phaseDone = true
 					return
 				end
@@ -1628,6 +1719,7 @@ task.spawn(function()
 		pcall(function()
 			if not IsJujutsuHigh() or JJH.stopAll then return end
 
+			if jjhBasicFallback then JJH.phaseDone = true end
 			local miracles = JJHTowers("BASIC")
 
 			-- 阶段 1: 2 个 Miracle 升到 Lv4
@@ -1647,7 +1739,8 @@ task.spawn(function()
 
 			-- 之后: 升级自己所有的塔 (Miracle 到 4 级为止)
 			for _, tower in ipairs(MyTowers()) do
-				local isBasic = JJHMatch("BASIC", tower.Name)
+				-- Lv4 封顶只针对 Miracle; fingerbearerawk 照常一直升
+				local isBasic = JJHMatch("BASIC", tower.Name) and not jjhBasicFallback
 				if (not isBasic) or JJHLevel(tower) < 4 then
 					local affected = JJHMatch("MEGUNA", tower.Name)
 						or JJHMatch("HARVESTER", tower.Name)
@@ -2393,7 +2486,7 @@ local uiOk, uiErr = pcall(function()
 			if eq then eqTotal = eqTotal + 1 end
 			placedTotal = placedTotal + #list
 
-			local target = JJH_TARGET[key] or 1
+			local target = JJHTarget(key)
 			local color, state
 			if #list >= target then
 				color = C.green
@@ -2413,6 +2506,9 @@ local uiOk, uiErr = pcall(function()
 			end
 			state = (eq and "已带" or (JJH_FARM[key] and "非当前农场" or "未带")) .. (lv ~= "" and (" · " .. lv) or " · 未放置")
 
+			if key == "BASIC" then
+				u.name.Text = jjhBasicFallback and "FingerBearer" or JJH_NAMES.BASIC
+			end
 			u.state.Text = state
 			u.state.TextColor3 = (#list > 0) and C.accent or (eq and C.sub or C.dim)
 			u.name.TextColor3 = (eq or #list > 0) and C.text or C.dim
