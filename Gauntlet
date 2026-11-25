@@ -1,8 +1,9 @@
 --========================================================--
 --              TOWER CONTROL // MAX PERFORMANCE
 --========================================================--
--- 2x Miracle -> Lv4, 完成后疯狂尝试放置其他所有塔 (有什么放什么)
+-- 2x Miracle 放满后直接进入下个阶段 (不再等 Lv4), 然后疯狂尝试放置其他所有塔 (有什么放什么)
 -- 新增 Pinata (原理同 TreeOfLife)
+-- 新增 Hanami 地图: Starter 放 35.89, 26.31, -153.02, 其他塔放 15.80, 26.31, -137.27
 -- UI: 按名字从 GetAllData 识别已带塔, 分类卡片显示
 --     每个塔一个小卡片: 显示放置数量 + 每个等级 (例: x2 · Lv3｜Lv4)
 --     右侧可拖动小按钮 / RightControl 显示/隐藏 UI
@@ -350,6 +351,12 @@ local POSITIONS = {
 		CFrame.new(113, 38, -131),
 		CFrame.new(113, 38, -131)
 	),
+	-- Hanami: Starter 放 35.89, 26.31, -153.02, 其他塔放 15.80, 26.31, -137.27
+	Hanami = BuildPos(
+		CFrame.new(35.89, 26.31, -153.02),
+		CFrame.new(15.80, 26.31, -137.27),
+		CFrame.new(15.80, 26.31, -137.27)
+	),
 }
 
 -- 所有地图: 所有农场塔 (Tree / Pinata / Frost / Agent / Kogane) 都和 Starter 放同一个坐标
@@ -376,7 +383,23 @@ do
 	jg.GOJO = attackPos
 end
 
-local MAP_ORDER = { "Jogo", "JujutsuHigh", "Toji", "Beach", "Dagon", "Meguna", "Shibuya" }
+-- Hanami: 只有 Starter (Miracle / Harvester) 放 35.89 位置, 其他所有塔 (含农场) 放 15.80 位置
+-- (必须放在上面 "农场塔和 Starter 同坐标" 循环之后, 才不会被覆盖)
+do
+	local hn = POSITIONS.Hanami
+	local otherPos = CFrame.new(15.80, 26.31, -137.27)
+	hn.TREE = otherPos
+	hn.PINATA = otherPos
+	hn.FROST = otherPos
+	hn.CHEAP = otherPos
+	hn.KOGANE = otherPos
+	hn.GOJO = otherPos
+	hn.KING = otherPos
+	hn.STRONGEST = otherPos
+	hn.B85 = otherPos
+end
+
+local MAP_ORDER = { "Jogo", "JujutsuHigh", "Toji", "Beach", "Dagon", "Meguna", "Shibuya", "Hanami" }
 local currentMap = nil
 
 local function DetectMap()
@@ -611,7 +634,7 @@ local function UpgradeLoop()
 		end
 	end
 
-	-- Miracle 阶段
+	-- Miracle 阶段 (现在放满 2 个 Miracle 就会被主流程标记为完成, 这里基本只在刚放完前几帧生效)
 	if not _G.miraclePhaseComplete then
 		if #miracles < 2 then return end
 
@@ -633,7 +656,7 @@ local function UpgradeLoop()
 		return
 	end
 
-	-- 其他塔升级
+	-- 其他塔升级 (Miracle 也会在这里继续升到 4 级)
 	for _, tower in ipairs(towersFolder:GetChildren()) do
 		local isBasic = NameMatches(tower.Name, TOWER_NAMES.BASIC)
 		if (not isBasic) or GetTowerLevel(tower) < 4 then
@@ -753,10 +776,12 @@ local function ProcessFlowInner()
 
 		ProcessMiracle()
 
+		-- 放满 2 个 Miracle 就直接进入下个阶段, 不需要等升到 Lv4
 		local miracles = GetTowersByName(TOWER_NAMES.BASIC)
 		if #miracles >= 2 then
 			environment.Stage = 1
-			print("[系统] 已有2个 Miracle")
+			_G.miraclePhaseComplete = true
+			print("[系统] 已有2个 Miracle, 直接进入放塔阶段")
 		end
 		return
 	end
